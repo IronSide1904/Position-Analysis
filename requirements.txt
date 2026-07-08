@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+yfinance
+requests
+python-dotenv
+plotly
+scipy
+beautifulsoup4
+lxml
+python-dateutil
+regex
+pytest

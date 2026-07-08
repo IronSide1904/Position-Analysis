@@ -1,0 +1,14 @@
+.env
+*TOKEN*.env
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/
+.venv/
+.vendor/
+pytest-cache-files-*/
+*.log
+*.pid
+*.db
+*.db-journal

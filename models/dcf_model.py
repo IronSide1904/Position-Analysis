@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from config import DCF_DEFAULTS
+from analysis.clause_model_mapper import build_assumption_update_from_clause
+
+
+def _latest(historicals: pd.DataFrame, column: str, default: float = 0.0) -> float:
+    if historicals is None or historicals.empty or column not in historicals:
+        return default
+    value = historicals[column].dropna()
+    return float(value.iloc[-1]) if not value.empty else default
+
+
+def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> dict:
+    """
+    Forecast 5+ years and compute EV, equity value, and fair value per share.
+    """
+    years = int(assumptions.get("forecast_years", DCF_DEFAULTS["forecast_years"]))
+    revenue = max(_latest(historicals, "Revenue"), 0)
+    if revenue <= 0:
+        revenue = float(market_data.get("market_cap") or 0) * 0.25
+    revenue_cagr = float(assumptions.get("revenue_cagr", 0.08))
+    tax_rate = float(assumptions.get("tax_rate", DCF_DEFAULTS["tax_rate"]))
+    nopat_margin = float(assumptions.get("nopat_margin", assumptions.get("operating_margin", 0.15) * (1 - tax_rate)))
+    ocf_margin = float(assumptions.get("ocf_margin", 0.18))
+    maintenance_capex_pct = float(assumptions.get("maintenance_capex_pct_revenue", 0.03))
+    growth_capex_pct = float(assumptions.get("growth_capex_pct_revenue", 0.02))
+    working_capital_pct = float(assumptions.get("working_capital_pct_revenue", 0.01))
+    da_pct = float(assumptions.get("depreciation_amortization_pct_revenue", maintenance_capex_pct))
+    sbc_pct = float(assumptions.get("sbc_pct_revenue", 0.0))
+    share_growth = float(assumptions.get("diluted_share_growth", 0.0))
+    dcf_mode = str(assumptions.get("dcf_mode", "FCFF")).upper()
+    wacc = max(float(assumptions.get("wacc", DCF_DEFAULTS["wacc"])), 0.001)
+    terminal_growth = float(assumptions.get("terminal_growth", DCF_DEFAULTS["terminal_growth"]))
+    terminal_multiple = float(assumptions.get("terminal_multiple", DCF_DEFAULTS["terminal_multiple"]))
+    shares = float(assumptions.get("diluted_shares") or _latest(historicals, "Diluted Shares") or market_data.get("shares_outstanding") or 0)
+    net_debt = float(assumptions.get("net_debt") if assumptions.get("net_debt") is not None else _latest(historicals, "Net Debt"))
+    mos = float(assumptions.get("margin_of_safety", DCF_DEFAULTS["margin_of_safety"]))
+    current_price = float(market_data.get("price") or 0)
+
+    rows = []
+    discounted_fcfs = []
+    current_revenue = revenue
+    for year in range(1, years + 1):
+        current_revenue *= 1 + revenue_cagr
+        nopat = current_revenue * nopat_margin
+        da = current_revenue * da_pct
+        ocf = current_revenue * ocf_margin
+        maintenance_capex = current_revenue * maintenance_capex_pct
+        growth_capex = current_revenue * growth_capex_pct
+        capex = maintenance_capex + growth_capex
+        working_capital = current_revenue * working_capital_pct
+        fcff = nopat + da - maintenance_capex - working_capital
+        fcf = fcff if dcf_mode == "FCFF" else ocf - capex
+        pv = fcf / ((1 + wacc) ** year)
+        discounted_fcfs.append(pv)
+        rows.append(
+            {
+                "Year": year,
+                "Revenue": current_revenue,
+                "D&A": da,
+                "NOPAT": nopat,
+                "OCF": ocf,
+                "Maintenance CAPEX": maintenance_capex,
+                "Growth CAPEX": growth_capex,
+                "CAPEX": capex,
+                "Working Capital Investment": working_capital,
+                "SBC": current_revenue * sbc_pct,
+                "FCF": fcf,
+                "FCFF": fcff,
+                "Diluted Shares": shares * ((1 + share_growth) ** year) if shares else None,
+                "PV FCF": pv,
+            }
+        )
+
+    final_fcf = rows[-1]["FCF"] if rows else 0
+    terminal_gordon = final_fcf * (1 + terminal_growth) / max(wacc - terminal_growth, 0.001)
+    terminal_exit = final_fcf * terminal_multiple
+    terminal_value = (terminal_gordon + terminal_exit) / 2
+    pv_terminal = terminal_value / ((1 + wacc) ** years)
+    enterprise_value = sum(discounted_fcfs) + pv_terminal
+    equity_value = enterprise_value - net_debt
+    fair_value = equity_value / shares if shares else None
+    buy_price = fair_value * (1 - mos) if fair_value is not None else None
+    upside = (fair_value / current_price - 1) if fair_value and current_price else None
+    tv_weight = pv_terminal / enterprise_value if enterprise_value else None
+
+    warnings = []
+    if tv_weight and tv_weight > 0.75:
+        warnings.append("Valuation depends heavily on terminal value.")
+    if shares <= 0:
+        warnings.append("Diluted shares unavailable; per-share value cannot be calculated.")
+
+    return {
+        "forecast_table": pd.DataFrame(rows),
+        "enterprise_value": enterprise_value,
+        "equity_value": equity_value,
+        "fair_value_per_share": fair_value,
+        "buy_price_after_margin_of_safety": buy_price,
+        "upside_downside_pct": upside,
+        "terminal_value": terminal_value,
+        "discounted_terminal_value": pv_terminal,
+        "terminal_value_weight_pct": tv_weight,
+        "dcf_mode": dcf_mode,
+        "warnings": warnings,
+    }
+
+
+def build_dcf_sensitivity_table(base_assumptions: dict, wacc_range: list[float], terminal_growth_range: list[float]) -> pd.DataFrame:
+    """
+    Build WACC vs terminal-growth fair-value sensitivity table.
+    """
+    historicals = base_assumptions.get("historicals", pd.DataFrame())
+    market_data = base_assumptions.get("market_data", {})
+    rows = []
+    for wacc in wacc_range:
+        row = {"WACC": wacc}
+        for growth in terminal_growth_range:
+            assumptions = dict(base_assumptions)
+            assumptions.update({"wacc": wacc, "terminal_growth": growth})
+            row[f"{growth:.1%}"] = run_dcf(historicals, market_data, assumptions)["fair_value_per_share"]
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def build_dcf_output_table(dcf_output: dict, assumptions: dict, market_data: dict) -> pd.DataFrame:
+    forecast = dcf_output.get("forecast_table", pd.DataFrame())
+    rows = [
+        {"Metric": "Discount rate / WACC"},
+        {"Metric": "Discount year"},
+        {"Metric": "NOPAT or FCFF"},
+        {"Metric": "Discount factor"},
+        {"Metric": "Discounted cash flow"},
+    ]
+    for _, row in forecast.iterrows() if forecast is not None and not forecast.empty else []:
+        year = int(row.get("Year") or len(rows) + 1)
+        column = f"Year {year}"
+        rows[0][column] = assumptions.get("wacc")
+        rows[1][column] = year
+        rows[2][column] = row.get("FCF")
+        rows[3][column] = 1 / ((1 + float(assumptions.get("wacc", DCF_DEFAULTS["wacc"]))) ** year)
+        rows[4][column] = row.get("PV FCF")
+    bridge = {
+        "Enterprise value": dcf_output.get("enterprise_value"),
+        "Net debt": assumptions.get("net_debt"),
+        "Equity value": dcf_output.get("equity_value"),
+        "Diluted shares": assumptions.get("diluted_shares") or market_data.get("shares_outstanding"),
+        "Fair value per share": dcf_output.get("fair_value_per_share"),
+        "Current share price": market_data.get("price"),
+        "Upside / downside %": dcf_output.get("upside_downside_pct"),
+        "Margin of safety %": assumptions.get("margin_of_safety"),
+        "Buy price": dcf_output.get("buy_price_after_margin_of_safety"),
+        "Terminal value % of EV": dcf_output.get("terminal_value_weight_pct"),
+    }
+    rows.extend({"Metric": key, "Bridge": value} for key, value in bridge.items())
+    return pd.DataFrame(rows)
+
+
+def build_reverse_dcf_table(reverse_output: dict, base_assumptions: dict, market_data: dict) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Metric": "Current share price", "Value": market_data.get("price")},
+            {"Metric": "Current market cap", "Value": market_data.get("market_cap")},
+            {"Metric": "Current enterprise value", "Value": market_data.get("enterprise_value")},
+            {"Metric": "Implied revenue CAGR", "Value": reverse_output.get("implied_revenue_cagr")},
+            {"Metric": "Implied NOPAT margin", "Value": reverse_output.get("implied_nopat_margin")},
+            {"Metric": "Implied OCF margin", "Value": reverse_output.get("implied_ocf_margin")},
+            {"Metric": "Implied terminal multiple", "Value": reverse_output.get("implied_terminal_multiple")},
+            {"Metric": "User/base revenue CAGR", "Value": base_assumptions.get("revenue_cagr")},
+            {"Metric": "User/base NOPAT margin", "Value": base_assumptions.get("nopat_margin")},
+            {"Metric": "User/base OCF margin", "Value": base_assumptions.get("ocf_margin")},
+            {"Metric": "User/base terminal multiple", "Value": base_assumptions.get("terminal_multiple")},
+            {"Metric": "Market expectation conclusion", "Value": reverse_output.get("interpretation")},
+        ]
+    )
+
+
+def build_scenario_table(historicals: pd.DataFrame, market_data: dict, base_assumptions: dict) -> pd.DataFrame:
+    scenarios = {
+        "Bear": {"revenue_cagr": -0.03, "gross_margin": -0.03, "wacc": 0.015, "terminal_growth": -0.01, "terminal_multiple": -2.0},
+        "Base": {},
+        "Bull": {"revenue_cagr": 0.05, "gross_margin": 0.03, "wacc": -0.01, "terminal_growth": 0.01, "terminal_multiple": 2.0},
+    }
+    values = {}
+    for scenario, deltas in scenarios.items():
+        assumptions = dict(base_assumptions)
+        for key, delta in deltas.items():
+            assumptions[key] = float(assumptions.get(key, 0) or 0) + delta
+        assumptions["wacc"] = max(float(assumptions.get("wacc", 0.095)), 0.04)
+        dcf = run_dcf(historicals, market_data, assumptions)
+        values[scenario] = {
+            "Revenue CAGR": assumptions.get("revenue_cagr"),
+            "Gross margin": assumptions.get("gross_margin"),
+            "EBIT margin": assumptions.get("operating_margin"),
+            "NOPAT margin": assumptions.get("nopat_margin"),
+            "OCF margin": assumptions.get("ocf_margin"),
+            "Maintenance CAPEX % revenue": assumptions.get("maintenance_capex_pct_revenue"),
+            "Growth CAPEX % revenue": assumptions.get("growth_capex_pct_revenue"),
+            "WACC": assumptions.get("wacc"),
+            "Terminal growth": assumptions.get("terminal_growth"),
+            "Terminal multiple": assumptions.get("terminal_multiple"),
+            "Fair value per share": dcf.get("fair_value_per_share"),
+            "Upside / downside": dcf.get("upside_downside_pct"),
+            "Margin-of-safety buy price": dcf.get("buy_price_after_margin_of_safety"),
+        }
+    rows = []
+    for line_item in next(iter(values.values())).keys():
+        row = {"Line Item": line_item}
+        for scenario in ["Bear", "Base", "Bull"]:
+            row[scenario] = values[scenario][line_item]
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def default_assumptions_from_historicals(historicals: pd.DataFrame, market_data: dict) -> dict:
+    revenue = _latest(historicals, "Revenue")
+    gross_margin = _latest(historicals, "Gross Margin", 0.45)
+    ebit = _latest(historicals, "EBIT")
+    ocf = _latest(historicals, "OCF")
+    capex = _latest(historicals, "Total CAPEX")
+    da = max(_latest(historicals, "EBITDA") - _latest(historicals, "EBIT"), 0)
+    sbc = _latest(historicals, "SBC")
+    latest_shares = _latest(historicals, "Diluted Shares") or market_data.get("shares_outstanding")
+    prior_shares = float(historicals["Diluted Shares"].dropna().iloc[-2]) if historicals is not None and len(historicals.get("Diluted Shares", pd.Series(dtype=float)).dropna()) >= 2 else latest_shares
+    diluted_share_growth = (latest_shares / prior_shares - 1) if latest_shares and prior_shares else 0.0
+    return {
+        "forecast_years": 5,
+        "dcf_mode": "FCFF",
+        "revenue_cagr": 0.08,
+        "gross_margin": gross_margin or 0.45,
+        "operating_margin": ebit / revenue if revenue else 0.15,
+        "tax_rate": DCF_DEFAULTS["tax_rate"],
+        "nopat_margin": (ebit / revenue) * (1 - DCF_DEFAULTS["tax_rate"]) if revenue else 0.12,
+        "ocf_margin": ocf / revenue if revenue else 0.16,
+        "maintenance_capex_pct_revenue": min(capex / revenue, 0.08) if revenue else 0.03,
+        "growth_capex_pct_revenue": 0.02,
+        "depreciation_amortization_pct_revenue": da / revenue if revenue else 0.03,
+        "working_capital_pct_revenue": 0.01,
+        "sbc_pct_revenue": sbc / revenue if revenue else 0.0,
+        "diluted_share_growth": diluted_share_growth,
+        "sm_pct_revenue": 0.0,
+        "rd_pct_revenue": 0.0,
+        "ga_pct_revenue": 0.0,
+        "wacc": DCF_DEFAULTS["wacc"],
+        "terminal_growth": DCF_DEFAULTS["terminal_growth"],
+        "terminal_multiple": DCF_DEFAULTS["terminal_multiple"],
+        "diluted_shares": latest_shares,
+        "net_debt": _latest(historicals, "Net Debt"),
+        "margin_of_safety": DCF_DEFAULTS["margin_of_safety"],
+    }
+
+
+def create_pending_assumption_update(clause_row: dict, old_value=None, new_value=None, scenario: str = "Base") -> dict:
+    """
+    Create a pending assumption update from a clause. Does not mutate DCF assumptions.
+    """
+    return build_assumption_update_from_clause(clause_row, old_value=old_value, new_value=new_value, scenario=scenario)
