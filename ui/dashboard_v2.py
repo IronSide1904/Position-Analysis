@@ -48,7 +48,18 @@ from ui.charts import (
     scenario_valuation_bar,
 )
 from ui.components import fmt_money, fmt_pct, format_dataframe_for_display, metric_row, show_table, show_warnings
-from ui.formatting import UNAVAILABLE, fmt_dollar, fmt_multiple, fmt_percent, fmt_per_share, fmt_score, fmt_shares
+from ui.formatting import (
+    UNAVAILABLE,
+    format_market_summary_value,
+    fmt_dollar,
+    fmt_multiple,
+    fmt_percent,
+    fmt_per_share,
+    fmt_ratio,
+    fmt_score,
+    fmt_shares,
+    fmt_volume,
+)
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -280,9 +291,7 @@ def _fmt_plain(value) -> str:
 
 
 def _fmt_ratio(value) -> str:
-    if value is None or pd.isna(value):
-        return UNAVAILABLE
-    return f"{float(value):,.0f}"
+    return fmt_ratio(value)
 
 
 def _fmt_summary_text(value) -> str:
@@ -434,39 +443,39 @@ def _data_coverage_expander(ctx: dict) -> None:
 
 def _finviz_decision_snapshot(market: dict) -> pd.DataFrame:
     rows = [
-        ("Share / Float", "Shares outstanding", _fmt_plain(market.get("shares_outstanding"))),
-        ("Share / Float", "Shares float", _fmt_plain(market.get("shares_float"))),
-        ("Share / Float", "Float / outstanding", fmt_pct(market.get("float_outstanding_pct"))),
-        ("Short / Liquidity", "Short float", fmt_pct(market.get("short_float"))),
-        ("Short / Liquidity", "Short ratio", _fmt_ratio(market.get("short_ratio"))),
-        ("Short / Liquidity", "Average volume", _fmt_plain(market.get("average_volume"))),
-        ("Short / Liquidity", "Current volume", _fmt_plain(market.get("volume"))),
-        ("Short / Liquidity", "Relative volume", _fmt_ratio(market.get("relative_volume"))),
-        ("Volatility / Technical", "Beta", _fmt_ratio(market.get("beta"))),
-        ("Volatility / Technical", "ATR", _fmt_ratio(market.get("atr"))),
-        ("Volatility / Technical", "Week volatility", fmt_pct(market.get("volatility_week"))),
-        ("Volatility / Technical", "Month volatility", fmt_pct(market.get("volatility_month"))),
+        ("Share / Float", "Shares Outstanding", format_market_summary_value("Shares Outstanding", market.get("shares_outstanding"))),
+        ("Share / Float", "Shares Float", format_market_summary_value("Shares Float", market.get("shares_float"))),
+        ("Share / Float", "Float / Outstanding", format_market_summary_value("Float / Outstanding", market.get("float_outstanding_pct"))),
+        ("Short / Liquidity", "Short Float", format_market_summary_value("Short Float", market.get("short_float"))),
+        ("Short / Liquidity", "Short Ratio", format_market_summary_value("Short Ratio", market.get("short_ratio"))),
+        ("Short / Liquidity", "Average Volume", format_market_summary_value("Average Volume", market.get("average_volume"))),
+        ("Short / Liquidity", "Volume", format_market_summary_value("Volume", market.get("volume"))),
+        ("Short / Liquidity", "Relative Volume", format_market_summary_value("Relative Volume", market.get("relative_volume"))),
+        ("Volatility / Technical", "Beta", format_market_summary_value("Beta", market.get("beta"))),
+        ("Volatility / Technical", "ATR", format_market_summary_value("ATR", market.get("atr"))),
+        ("Volatility / Technical", "Perf Week", format_market_summary_value("Perf Week", market.get("volatility_week"))),
+        ("Volatility / Technical", "Perf Month", format_market_summary_value("Perf Month", market.get("volatility_month"))),
         ("Volatility / Technical", "Gap", fmt_pct(market.get("gap"))),
         ("Volatility / Technical", "Change", fmt_pct(market.get("change"))),
-        ("Volatility / Technical", "SMA20", fmt_pct(market.get("sma20"))),
-        ("Volatility / Technical", "SMA50", fmt_pct(market.get("sma50"))),
-        ("Volatility / Technical", "SMA200", fmt_pct(market.get("sma200"))),
-        ("Valuation", "P/E", _fmt_ratio(market.get("pe"))),
-        ("Valuation", "Forward P/E", _fmt_ratio(market.get("forward_pe"))),
-        ("Valuation", "PEG", _fmt_ratio(market.get("peg"))),
-        ("Valuation", "P/S", _fmt_ratio(market.get("ps"))),
-        ("Valuation", "P/B", _fmt_ratio(market.get("pb"))),
-        ("Valuation", "P/FCF", _fmt_ratio(market.get("pfcf"))),
-        ("Profitability", "ROA", fmt_pct(market.get("roa"))),
-        ("Profitability", "ROE", fmt_pct(market.get("roe"))),
-        ("Profitability", "ROI / ROIC", fmt_pct(market.get("roi"))),
-        ("Profitability", "Gross margin", fmt_pct(market.get("gross_margin"))),
-        ("Profitability", "Operating margin", fmt_pct(market.get("operating_margin"))),
-        ("Profitability", "Profit margin", fmt_pct(market.get("profit_margin"))),
-        ("Balance Sheet", "Current ratio", _fmt_ratio(market.get("current_ratio"))),
-        ("Balance Sheet", "Quick ratio", _fmt_ratio(market.get("quick_ratio"))),
-        ("Balance Sheet", "LT debt / equity", _fmt_ratio(market.get("lt_debt_to_equity"))),
-        ("Balance Sheet", "Total debt / equity", _fmt_ratio(market.get("debt_to_equity"))),
+        ("Volatility / Technical", "SMA20", format_market_summary_value("SMA20", market.get("sma20"))),
+        ("Volatility / Technical", "SMA50", format_market_summary_value("SMA50", market.get("sma50"))),
+        ("Volatility / Technical", "SMA200", format_market_summary_value("SMA200", market.get("sma200"))),
+        ("Valuation", "P/E", format_market_summary_value("P/E", market.get("pe"))),
+        ("Valuation", "Forward P/E", format_market_summary_value("Forward P/E", market.get("forward_pe"))),
+        ("Valuation", "PEG", format_market_summary_value("PEG", market.get("peg"))),
+        ("Valuation", "P/S", format_market_summary_value("P/S", market.get("ps"))),
+        ("Valuation", "P/B", format_market_summary_value("P/B", market.get("pb"))),
+        ("Valuation", "P/FCF", format_market_summary_value("P/FCF", market.get("pfcf"))),
+        ("Profitability", "ROA", format_market_summary_value("ROA", market.get("roa"))),
+        ("Profitability", "ROE", format_market_summary_value("ROE", market.get("roe"))),
+        ("Profitability", "ROIC", format_market_summary_value("ROIC", market.get("roi"))),
+        ("Profitability", "Gross Margin", format_market_summary_value("Gross Margin", market.get("gross_margin"))),
+        ("Profitability", "Operating Margin", format_market_summary_value("Operating Margin", market.get("operating_margin"))),
+        ("Profitability", "Profit Margin", format_market_summary_value("Profit Margin", market.get("profit_margin"))),
+        ("Balance Sheet", "Current Ratio", format_market_summary_value("Current Ratio", market.get("current_ratio"))),
+        ("Balance Sheet", "Quick Ratio", format_market_summary_value("Quick Ratio", market.get("quick_ratio"))),
+        ("Balance Sheet", "LT Debt / Equity", format_market_summary_value("LT Debt / Equity", market.get("lt_debt_to_equity"))),
+        ("Balance Sheet", "Debt / Equity", format_market_summary_value("Debt / Equity", market.get("debt_to_equity"))),
         ("Calendar", "Earnings date", market.get("earnings_date") or UNAVAILABLE),
     ]
     return pd.DataFrame(rows, columns=["category", "field", "value"])
