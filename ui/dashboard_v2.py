@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 import streamlit as st
 
@@ -217,20 +219,20 @@ def _filing_metadata(dataset: dict) -> dict:
 
 def _fmt_number(value, suffix: str = "") -> str:
     if value is None or pd.isna(value):
-        return "Data unavailable"
-    return f"{float(value):,.1f}{suffix}"
+        return UNAVAILABLE
+    return f"{float(value):,.0f}{suffix}"
 
 
 def _fmt_plain(value) -> str:
     if value is None or pd.isna(value):
-        return "Data unavailable"
+        return UNAVAILABLE
     return f"{float(value):,.0f}"
 
 
 def _fmt_ratio(value) -> str:
     if value is None or pd.isna(value):
-        return "Data unavailable"
-    return f"{float(value):,.2f}"
+        return UNAVAILABLE
+    return f"{float(value):,.0f}"
 
 
 def _fmt_summary_text(value) -> str:
@@ -314,7 +316,7 @@ def _finviz_decision_snapshot(market: dict) -> pd.DataFrame:
         ("Balance Sheet", "Quick ratio", _fmt_ratio(market.get("quick_ratio"))),
         ("Balance Sheet", "LT debt / equity", _fmt_ratio(market.get("lt_debt_to_equity"))),
         ("Balance Sheet", "Total debt / equity", _fmt_ratio(market.get("debt_to_equity"))),
-        ("Calendar", "Earnings date", market.get("earnings_date") or "Data unavailable"),
+        ("Calendar", "Earnings date", market.get("earnings_date") or UNAVAILABLE),
     ]
     return pd.DataFrame(rows, columns=["category", "field", "value"])
 
@@ -360,6 +362,82 @@ def _top_clause_impacts(clauses: pd.DataFrame) -> pd.DataFrame:
         "suggested_assumption_change": "Action",
     }
     return frame.rename(columns=rename)
+
+
+def _first_sentences(text: str | None, limit: int = 3) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return UNAVAILABLE
+    sentences = re.split(r"(?<=[.!?])\s+", clean)
+    return " ".join(sentences[:limit])
+
+
+def _company_story(ctx: dict) -> None:
+    dataset = ctx["dataset"]
+    profile = ctx.get("accounting_interpretation", {}).get("business_profile", {})
+    management = ctx.get("management", {})
+    moat = ctx.get("moat", {})
+    company = dataset.get("company") or dataset.get("ticker")
+    description = dataset.get("company_description")
+    sector = dataset.get("sector") or UNAVAILABLE
+    industry = dataset.get("industry") or UNAVAILABLE
+
+    st.caption("Company Story: what the company does, how the business model works, product/economic profile, and management or founder evidence.")
+    metric_row(
+        [
+            ("Company", company, "text"),
+            ("Sector", sector, "text"),
+            ("Industry", industry, "text"),
+            ("Business Model", profile.get("business_model"), "text"),
+            ("Asset Intensity", profile.get("asset_intensity"), "text"),
+        ]
+    )
+
+    c1, c2 = st.columns([0.58, 0.42])
+    with c1:
+        st.subheader("Business and Products")
+        st.write(_first_sentences(description, limit=4))
+        story_rows = pd.DataFrame(
+            [
+                {"Topic": "Business model", "Read": profile.get("business_model", UNAVAILABLE), "Evidence": "; ".join(profile.get("evidence", [])[:2]) or "Manual review required"},
+                {"Topic": "Products / offering", "Read": industry, "Evidence": "Derived from company profile and industry classification."},
+                {"Topic": "Economic profile", "Read": profile.get("margin_profile", UNAVAILABLE), "Evidence": f"CAPEX profile: {profile.get('capex_profile', UNAVAILABLE)}"},
+                {"Topic": "Working capital", "Read": profile.get("working_capital_profile", UNAVAILABLE), "Evidence": "Based on industry and filing-clause signals."},
+                {"Topic": "Moat", "Read": moat.get("classification", UNAVAILABLE), "Evidence": moat.get("terminal_value_implication", UNAVAILABLE)},
+            ]
+        )
+        show_table(story_rows, "Company story unavailable.")
+
+    with c2:
+        st.subheader("Management / Founder Story")
+        st.write(management.get("summary") or "Management story unavailable. Load SEC evidence for deeper founder, board, and governance context.")
+        metric_row(
+            [
+                ("Style", management.get("style"), "text"),
+                ("Score", management.get("management_score"), "score"),
+                ("Confidence", profile.get("confidence"), "text"),
+            ]
+        )
+        strengths = management.get("strengths") or []
+        if strengths:
+            _mini_list("Founder / management evidence", strengths)
+        else:
+            _mini_list("Founder / management evidence", ["No founder-specific evidence detected in loaded data.", "Load SEC evidence for fuller management context."])
+        show_warnings(management.get("red_flags", []))
+
+    with st.expander("Source Context"):
+        show_table(
+            pd.DataFrame(
+                [
+                    {"Field": "Ticker", "Value": dataset.get("ticker"), "Source": "User input / providers"},
+                    {"Field": "Company name", "Value": dataset.get("company"), "Source": "SEC / Finviz / yfinance"},
+                    {"Field": "Description", "Value": _first_sentences(description, limit=2), "Source": "yfinance profile"},
+                    {"Field": "CIK", "Value": dataset.get("cik"), "Source": "SEC"},
+                    {"Field": "Evidence mode", "Value": "Loaded" if dataset.get("evidence_loaded") else "Fast mode", "Source": "Dashboard state"},
+                ]
+            ),
+            "Source context unavailable.",
+        )
 
 
 def _mini_list(title: str, items: list[str]) -> None:
@@ -581,30 +659,38 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict) -> pd.DataFr
 
 
 def _assumption_editor(base: dict) -> dict:
+    def pct_slider(label: str, minimum: float, maximum: float, value: float, step: float = 0.5) -> float:
+        try:
+            pct_value = float(value) * 100
+        except (TypeError, ValueError):
+            pct_value = 0.0
+        pct_value = min(max(pct_value, minimum * 100), maximum * 100)
+        return st.slider(label, minimum * 100, maximum * 100, pct_value, step, format="%.1f%%") / 100
+
     st.markdown('<div class="pa-section-title">DCF Controls</div>', unsafe_allow_html=True)
     dcf_mode = st.segmented_control("DCF mode", ["FCFF", "FCF"], default=str(base.get("dcf_mode", "FCFF")).upper())
     forecast_years = st.slider("Forecast years", 5, 10, int(base.get("forecast_years", 5)), 1)
     c1, c2 = st.columns(2)
     with c1:
-        revenue_cagr = st.slider("Revenue CAGR", -0.20, 0.60, float(base.get("revenue_cagr", 0.08)), 0.01, format="%.2f")
-        gross_margin = st.slider("Gross margin", -0.20, 0.80, float(base.get("gross_margin", 0.45)), 0.01, format="%.2f")
-        ebit_margin = st.slider("EBIT margin", -0.20, 0.60, float(base.get("operating_margin", 0.15)), 0.01, format="%.2f")
-        tax_rate = st.slider("Tax rate", 0.00, 0.40, float(base.get("tax_rate", 0.21)), 0.01, format="%.2f")
-        sm_pct = st.slider("S&M / revenue", 0.00, 0.50, float(base.get("sm_pct_revenue", 0.0)), 0.01, format="%.2f")
-        rd_pct = st.slider("R&D / revenue", 0.00, 0.50, float(base.get("rd_pct_revenue", 0.0)), 0.01, format="%.2f")
-        ga_pct = st.slider("G&A / revenue", 0.00, 0.50, float(base.get("ga_pct_revenue", 0.0)), 0.01, format="%.2f")
-        ocf_margin = st.slider("OCF margin", -0.20, 0.60, float(base.get("ocf_margin", 0.16)), 0.01, format="%.2f")
+        revenue_cagr = pct_slider("Revenue CAGR", -0.20, 0.60, base.get("revenue_cagr", 0.08))
+        gross_margin = pct_slider("Gross margin", -0.20, 0.80, base.get("gross_margin", 0.45))
+        ebit_margin = pct_slider("EBIT margin", -0.20, 0.60, base.get("operating_margin", 0.15))
+        tax_rate = pct_slider("Tax rate", 0.00, 0.40, base.get("tax_rate", 0.21))
+        sm_pct = pct_slider("S&M / revenue", 0.00, 0.50, base.get("sm_pct_revenue", 0.0))
+        rd_pct = pct_slider("R&D / revenue", 0.00, 0.50, base.get("rd_pct_revenue", 0.0))
+        ga_pct = pct_slider("G&A / revenue", 0.00, 0.50, base.get("ga_pct_revenue", 0.0))
+        ocf_margin = pct_slider("OCF margin", -0.20, 0.60, base.get("ocf_margin", 0.16))
     with c2:
-        maint_capex = st.slider("Maintenance CAPEX / revenue", 0.00, 0.25, float(base.get("maintenance_capex_pct_revenue", 0.03)), 0.005, format="%.3f")
-        growth_capex = st.slider("Growth CAPEX / revenue", 0.00, 0.35, float(base.get("growth_capex_pct_revenue", 0.02)), 0.005, format="%.3f")
-        working_capital = st.slider("Working capital / revenue", -0.10, 0.20, float(base.get("working_capital_pct_revenue", 0.01)), 0.005, format="%.3f")
-        sbc_pct = st.slider("SBC / revenue", 0.00, 0.30, float(base.get("sbc_pct_revenue", 0.0)), 0.005, format="%.3f")
-        wacc = st.slider("WACC", 0.04, 0.20, float(base.get("wacc", 0.095)), 0.005, format="%.3f")
-        terminal_growth = st.slider("Terminal growth", -0.02, 0.06, float(base.get("terminal_growth", 0.025)), 0.005, format="%.3f")
-        terminal_multiple = st.slider("Terminal multiple", 4.0, 35.0, float(base.get("terminal_multiple", 15.0)), 0.5)
-        share_growth = st.slider("Diluted share growth", -0.10, 0.20, float(base.get("diluted_share_growth", 0.0)), 0.005, format="%.3f")
-    shares = st.number_input("Diluted shares", value=float(base.get("diluted_shares") or 0), min_value=0.0, step=1_000_000.0)
-    margin_of_safety = st.slider("Margin of safety", 0.0, 0.6, float(base.get("margin_of_safety", 0.30)), 0.05)
+        maint_capex = pct_slider("Maintenance CAPEX / revenue", 0.00, 0.25, base.get("maintenance_capex_pct_revenue", 0.03))
+        growth_capex = pct_slider("Growth CAPEX / revenue", 0.00, 0.35, base.get("growth_capex_pct_revenue", 0.02))
+        working_capital = pct_slider("Working capital / revenue", -0.10, 0.20, base.get("working_capital_pct_revenue", 0.01))
+        sbc_pct = pct_slider("SBC / revenue", 0.00, 0.30, base.get("sbc_pct_revenue", 0.0))
+        wacc = pct_slider("WACC", 0.04, 0.20, base.get("wacc", 0.095))
+        terminal_growth = pct_slider("Terminal growth", -0.02, 0.06, base.get("terminal_growth", 0.025))
+        terminal_multiple = st.slider("Terminal multiple", 4.0, 35.0, float(base.get("terminal_multiple", 15.0)), 1.0, format="%.0f")
+        share_growth = pct_slider("Diluted share growth", -0.10, 0.20, base.get("diluted_share_growth", 0.0))
+    shares = st.number_input("Diluted shares", value=float(base.get("diluted_shares") or 0), min_value=0.0, step=1_000_000.0, format="%.0f")
+    margin_of_safety = pct_slider("Margin of safety", 0.0, 0.6, base.get("margin_of_safety", 0.30), step=5.0)
     nopat_margin = ebit_margin * (1 - tax_rate)
     return {
         **base,
@@ -931,7 +1017,7 @@ def _financial_reports(ctx: dict) -> None:
     if model_table is None or model_table.empty:
         st.info("Financial model table unavailable.")
     else:
-        st.dataframe(_style_financial_model_table(format_dataframe_for_display(model_table)), width="stretch")
+        st.dataframe(_style_financial_model_table(format_dataframe_for_display(model_table)), width="stretch", hide_index=True)
 
     with st.expander("Row Groups: Operating Model"):
         show_table(model_table[model_table["Line Item"].isin([
@@ -1430,6 +1516,7 @@ def render_dashboard():
 
     tabs = [
         "Snapshot",
+        "Company Story",
         "Financials",
         "Interactive DCF",
         "Reverse DCF",
@@ -1447,23 +1534,25 @@ def render_dashboard():
     with selected_tabs[0]:
         _overview(ctx)
     with selected_tabs[1]:
-        _financial_reports(ctx)
+        _company_story(ctx)
     with selected_tabs[2]:
-        _valuation(ctx)
+        _financial_reports(ctx)
     with selected_tabs[3]:
-        _reverse_dcf_tab(ctx)
+        _valuation(ctx)
     with selected_tabs[4]:
-        _multiples_peers(ctx)
+        _reverse_dcf_tab(ctx)
     with selected_tabs[5]:
-        _clause_annotation_map(ctx)
+        _multiples_peers(ctx)
     with selected_tabs[6]:
-        _accounting_quality(ctx)
+        _clause_annotation_map(ctx)
     with selected_tabs[7]:
-        _ma_management_sbc(ctx)
+        _accounting_quality(ctx)
     with selected_tabs[8]:
-        _moat_risks(ctx)
+        _ma_management_sbc(ctx)
     with selected_tabs[9]:
+        _moat_risks(ctx)
+    with selected_tabs[10]:
         _final_decision(ctx)
     if debug:
-        with selected_tabs[10]:
+        with selected_tabs[11]:
             _data_lab(ctx)

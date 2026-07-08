@@ -114,17 +114,17 @@ def _confidence(evidence_count: int, has_financials: bool = True, penalty: int =
 
 def _fmt_money(value: float | None) -> str:
     if value is None or pd.isna(value):
-        return "Data unavailable"
+        return "Unavailable"
     value = float(value)
     for suffix, divisor in [("T", 1e12), ("B", 1e9), ("M", 1e6), ("K", 1e3)]:
         if abs(value) >= divisor:
-            return f"${value / divisor:,.2f}{suffix}"
-    return f"${value:,.2f}"
+            return f"${value / divisor:,.0f}{suffix}"
+    return f"${value:,.0f}"
 
 
 def _fmt_pct(value: float | None) -> str:
     if value is None or pd.isna(value):
-        return "Data unavailable"
+        return "Unavailable"
     return f"{float(value):.1%}"
 
 
@@ -265,9 +265,9 @@ def interpret_depreciation_amortization(
     asset_light = profile.get("asset_intensity") == "Low" or profile.get("business_model") in {"SaaS", "Marketplace", "Services"}
 
     if capex_tracks_da:
-        reasons.append(f"Historical CAPEX/D&A median is {median_ratio:.2f}x.")
+        reasons.append(f"Historical CAPEX/D&A median is {median_ratio:.0f}x.")
     elif median_ratio is not None:
-        reasons.append(f"Historical CAPEX/D&A median is {median_ratio:.2f}x, so the line items do not track closely.")
+        reasons.append(f"Historical CAPEX/D&A median is {median_ratio:.0f}x, so the line items do not track closely.")
 
     if asset_heavy and capex_tracks_da and not acquisition_distortion and not growth_distortion:
         proxy = True
@@ -407,7 +407,7 @@ def interpret_ocf_quality(historicals: pd.DataFrame, clauses: pd.DataFrame, busi
     implications: list[str] = []
 
     if ocf_to_nopat is not None:
-        drivers.append(f"OCF/NOPAT is {ocf_to_nopat:.2f}x.")
+        drivers.append(f"OCF/NOPAT is {ocf_to_nopat:.0f}x.")
         if ocf_to_nopat < 0.7:
             score -= 2
             red_flags.append("OCF conversion trails NOPAT.")

@@ -35,13 +35,13 @@ def fmt_dollar(value, scale: str = "M") -> str:
 
 def fmt_per_share(value) -> str:
     """
-    Format per-share values with two decimals.
-    Example: 15.423 -> $15.42
+    Format per-share values with no decimals.
+    Example: 15.423 -> $15
     """
     number = _as_float(value)
     if number is None:
         return UNAVAILABLE
-    return f"${number:,.2f}"
+    return f"${number:,.0f}"
 
 
 def fmt_percent(value) -> str:
@@ -57,13 +57,13 @@ def fmt_percent(value) -> str:
 
 def fmt_multiple(value) -> str:
     """
-    Format valuation multiples with one decimal.
-    Example: 15.234 -> 15.2x
+    Format valuation multiples with no decimals.
+    Example: 15.234 -> 15x
     """
     number = _as_float(value)
     if number is None:
         return UNAVAILABLE
-    return f"{number:,.1f}x"
+    return f"{number:,.0f}x"
 
 
 def fmt_score(value) -> str:
@@ -88,7 +88,7 @@ def fmt_shares(value) -> str:
     return f"{number / 1e6:,.0f}M"
 
 
-def fmt_number(value, decimals: int = 1) -> str:
+def fmt_number(value, decimals: int = 0) -> str:
     """
     General number formatter.
     """

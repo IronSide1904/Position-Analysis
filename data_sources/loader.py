@@ -155,6 +155,7 @@ def load_company_dataset(ticker: str, include_deep_sec: bool = False) -> dict:
     return {
         "ticker": symbol,
         "company": _pick(sec.get("company_name"), finviz.get("company"), yfinance_snapshot.get("company")),
+        "company_description": yfinance_snapshot.get("description"),
         "sector": _pick(finviz.get("sector"), yfinance_snapshot.get("sector")),
         "industry": _pick(finviz.get("industry"), yfinance_snapshot.get("industry")),
         "cik": sec.get("cik"),

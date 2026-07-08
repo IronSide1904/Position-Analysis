@@ -51,7 +51,7 @@ def dcf_sensitivity_heatmap(sensitivity: pd.DataFrame):
         title="DCF Sensitivity: Fair Value per Share",
         labels={"x": "Terminal Growth Rate", "y": "WACC / Discount Rate", "color": "Fair Value"},
     )
-    fig.update_traces(texttemplate="$%{z:,.2f}", textfont_size=12, hovertemplate="WACC: %{y}<br>Terminal growth: %{x}<br>Fair value: $%{z:,.2f}<extra></extra>")
+    fig.update_traces(texttemplate="$%{z:,.0f}", textfont_size=12, hovertemplate="WACC: %{y}<br>Terminal growth: %{x}<br>Fair value: $%{z:,.0f}<extra></extra>")
     fig.update_layout(margin=dict(l=10, r=10, t=50, b=40), height=380)
     return fig
 

@@ -53,7 +53,7 @@ def fmt_pct(value):
 
 
 def fmt_number_display(value):
-    return fmt_number(value, decimals=1)
+    return fmt_number(value, decimals=0)
 
 
 def metric_row(items: list[tuple[str, object, str]]):
@@ -93,7 +93,7 @@ def _format_cell(value, column_name: str):
             return fmt_pct(value)
         if any(hint in name for hint in MONEY_HINTS):
             return fmt_money(value)
-        return fmt_number(value, decimals=1)
+        return fmt_number(value, decimals=0)
     return value
 
 
@@ -137,4 +137,4 @@ def show_table(df: pd.DataFrame, empty_message: str = "Not enough data available
         st.info(empty_message)
     else:
         display_df = format_dataframe_for_display(df)
-        st.dataframe(display_df, width="stretch")
+        st.dataframe(display_df, width="stretch", hide_index=True)
