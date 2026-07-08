@@ -48,6 +48,16 @@ from ui.charts import (
     scenario_valuation_bar,
 )
 from ui.components import fmt_money, fmt_pct, format_dataframe_for_display, metric_row, show_table, show_warnings
+from ui.design_system import (
+    apply_design_system,
+    format_short_score,
+    render_cockpit_header,
+    render_copy_summary,
+    render_decision_summary,
+    render_section,
+    render_status_grid,
+    render_tearsheet,
+)
 from ui.formatting import (
     UNAVAILABLE,
     format_market_summary_value,
@@ -91,6 +101,29 @@ def _css() -> None:
         }
         .pa-title { font-size: 1.55rem; font-weight: 700; margin: 0; }
         .pa-subtle { color: #5d6978; font-size: 0.9rem; }
+        .pa-build {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border: 1px solid #93c5fd;
+            border-radius: 999px;
+            padding: 0.22rem 0.65rem;
+            margin: 0 0 0.6rem 0;
+            background: #eff6ff;
+            color: #1e3a8a;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+        .pa-tab-note {
+            border: 1px solid #d8e1ea;
+            border-radius: 8px;
+            padding: 0.45rem 0.65rem;
+            margin: 0.25rem 0 0.45rem 0;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 0.85rem;
+            font-weight: 700;
+        }
         .pa-pill {
             display: inline-block;
             border: 1px solid #c8d3df;
@@ -506,6 +539,202 @@ def _top_three_risks(ctx: dict) -> list[str]:
     dcf_warnings = ctx.get("base_dcf", {}).get("warnings", []) or []
     combined = risks + accounting + dcf_warnings
     return (combined or ["Manual review required where data is unavailable."])[:3]
+
+
+def _clean_classification(value) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"none", "nan", "inf", "-inf"}:
+        return "Unknown"
+    if "unknown" in text.lower() or "insufficient" in text.lower():
+        return "Unknown"
+    return text
+
+
+def _data_confidence(ctx: dict) -> tuple[str, str, str]:
+    dataset = ctx.get("dataset", {})
+    sources = set(dataset.get("sources", []))
+    missing = _manual_review_items(ctx)
+    if {"SEC/EDGAR", "Finviz Elite", "yfinance"}.issubset(sources) and not missing:
+        return "High", "Core market, financial, and source coverage are loaded.", "supportive"
+    if "SEC/EDGAR" in sources and "yfinance" in sources:
+        return "Medium", "Core providers are loaded; selected items still require manual review.", "caution"
+    if sources:
+        return "Partial", "Some providers are loaded, but source coverage is incomplete.", "warning"
+    return "Low", "Provider data is unavailable or blocked.", "negative"
+
+
+def _valuation_view(ctx: dict) -> tuple[str, str, str]:
+    dcf = ctx.get("base_dcf", {})
+    upside = dcf.get("upside_downside_pct")
+    terminal = dcf.get("terminal_value_weight_pct")
+    if upside is None:
+        return "Unknown", "Fair value cannot be calculated from current data.", "caution"
+    if upside >= 0.2:
+        view = "Undervalued"
+        status = "supportive"
+    elif upside >= -0.1:
+        view = "Fair"
+        status = "neutral"
+    else:
+        view = "Expensive"
+        status = "warning"
+    subtitle = f"Fair value gap is {fmt_percent(upside)}."
+    if terminal and terminal > 0.65:
+        subtitle += f" Terminal value is high at {fmt_percent(terminal)} of EV."
+    return view, subtitle, status
+
+
+def _risk_level(ctx: dict) -> tuple[str, str, str]:
+    risk_score = ctx.get("risks", {}).get("risk_score")
+    warnings = len(ctx.get("accounting_interpretation", {}).get("warnings", []) or [])
+    if risk_score is None and warnings:
+        return "Manual Review", "Accounting and evidence warnings need review before sizing.", "caution"
+    try:
+        score = float(risk_score or 50)
+    except Exception:
+        score = 50
+    if score >= 70:
+        return "Elevated", "Risk score is high; require stronger margin of safety.", "warning"
+    if warnings:
+        return "Medium", "Some accounting or source issues need review.", "caution"
+    return "Normal", "No major extracted risk spike in fast mode.", "neutral"
+
+
+def _market_regime(ctx: dict) -> tuple[str, str, str]:
+    market = ctx.get("dataset", {}).get("market_data", {})
+    sma20 = market.get("sma20")
+    sma50 = market.get("sma50")
+    change = market.get("change")
+    positives = sum(1 for value in [sma20, sma50, change] if value is not None and value > 0)
+    if positives >= 2:
+        return "Supportive", "Price action is above key short-term references.", "supportive"
+    if positives == 1:
+        return "Neutral", "Market tape is mixed; wait for confirmation.", "neutral"
+    return "Risk-Off", "Momentum context is weak or unavailable.", "warning"
+
+
+def _swing_view(ctx: dict) -> tuple[str, str, str]:
+    market = ctx.get("dataset", {}).get("market_data", {})
+    rel_vol = market.get("relative_volume")
+    short_float = market.get("short_float")
+    change = market.get("change")
+    sma20 = market.get("sma20")
+    if change is None and sma20 is None:
+        return "Unknown", "Swing context requires live market and technical data.", "caution"
+    if change and change > 0.08:
+        return "Tradable Pullback", "Move may be extended; prefer pullback or reduced size.", "caution"
+    if (sma20 or 0) > 0 and (rel_vol or 0) >= 0.8:
+        return "Tradable", "Short-term trend and volume context are supportive.", "supportive"
+    if short_float and short_float > 0.15:
+        return "Warning", "Short interest is high; volatility can cut both ways.", "warning"
+    return "Neutral", "Setup is not broken, but confirmation is incomplete.", "neutral"
+
+
+def _volume_context(ctx: dict) -> tuple[str, str, str]:
+    market = ctx.get("dataset", {}).get("market_data", {})
+    rel_vol = market.get("relative_volume")
+    change = market.get("change")
+    if rel_vol is None:
+        return "Unavailable", "Relative volume is missing.", "neutral"
+    if rel_vol >= 1.5 and (change or 0) > 0:
+        return "Accumulation", f"Relative volume is {fmt_ratio(rel_vol)} with positive price action.", "supportive"
+    if rel_vol >= 1.5 and (change or 0) < 0:
+        return "Distribution Warning", f"Relative volume is {fmt_ratio(rel_vol)} while price is down.", "warning"
+    if rel_vol >= 0.7:
+        return "Neutral", f"Relative volume is {fmt_ratio(rel_vol)}.", "neutral"
+    return "Quiet", f"Relative volume is low at {fmt_ratio(rel_vol)}.", "neutral"
+
+
+def _swing_volatility(ctx: dict) -> tuple[str, str, str]:
+    market = ctx.get("dataset", {}).get("market_data", {})
+    atr = market.get("atr")
+    beta = market.get("beta")
+    if atr is None and beta is None:
+        return "Unavailable", "ATR and beta are missing.", "neutral"
+    if (beta or 0) >= 1.8:
+        return "Dangerous", f"Beta is {fmt_ratio(beta)}; sizing should be reduced.", "negative"
+    if (beta or 0) >= 1.25:
+        return "Elevated", f"Beta is {fmt_ratio(beta)} and ATR is {fmt_ratio(atr)}.", "warning"
+    return "Tradable", f"Beta is {fmt_ratio(beta)} and ATR is {fmt_ratio(atr)}.", "supportive"
+
+
+def infer_stock_profile(dataset: dict) -> str:
+    sector = str(dataset.get("sector") or "").lower()
+    industry = str(dataset.get("industry") or "").lower()
+    text = f"{sector} {industry}"
+    if any(token in text for token in ["software", "saas", "application", "cloud"]):
+        return "SaaS / Software"
+    if any(token in text for token in ["hardware", "industrial", "semiconductor", "electronics", "equipment"]):
+        return "Industrial / Hardware"
+    if any(token in text for token in ["marketplace", "internet retail", "platform"]):
+        return "Marketplace / Platform"
+    if any(token in text for token in ["bank", "financial", "insurance", "asset management"]):
+        return "Financial"
+    if any(token in text for token in ["consumer", "retail", "apparel", "restaurant"]):
+        return "Consumer"
+    if any(token in text for token in ["energy", "oil", "gas", "commodity", "mining"]):
+        return "Energy / Commodity"
+    return "General"
+
+
+def _manual_review_plan_table(ctx: dict) -> pd.DataFrame:
+    items = _manual_review_items(ctx)
+    rows = []
+    for item in items:
+        rows.append(
+            {
+                "Data needed": item.get("Data Needed"),
+                "Why missing": item.get("Reason"),
+                "Model impact": item.get("Dashboard Action"),
+                "Where to verify": item.get("Section to Review"),
+                "Keywords": item.get("Keywords"),
+                "Dashboard plan": "1. Try structured provider tags. 2. Check fallback market data. 3. Review latest filing note. 4. Mark confidence low if unresolved.",
+                "Source link": item.get("Source URL"),
+            }
+        )
+    if not rows:
+        rows.append(
+            {
+                "Data needed": "No critical missing item",
+                "Why missing": "Core providers returned enough data for cockpit use.",
+                "Model impact": "Normal sensitivity review still applies.",
+                "Where to verify": "Source evidence table",
+                "Keywords": "revenue, cash flow, debt, capex, risk",
+                "Dashboard plan": "Keep provider cache fresh and review filings for thesis-changing evidence.",
+                "Source link": "Provider / SEC source tables",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _decision_summary(ctx: dict) -> dict:
+    valuation_view, valuation_subtitle, _ = _valuation_view(ctx)
+    swing_view, swing_subtitle, _ = _swing_view(ctx)
+    confidence, confidence_subtitle, _ = _data_confidence(ctx)
+    return {
+        "what_matters": [
+            f"Investment view is {ctx['scoring'].get('recommendation') or 'Unknown'} while valuation reads {valuation_view}.",
+            f"Swing view is {swing_view}. {swing_subtitle}",
+            ctx.get("reverse", {}).get("interpretation") or "Reverse DCF benchmark unavailable.",
+        ],
+        "supporting": _top_three_drivers(ctx)[:2],
+        "contradicting": _top_three_risks(ctx)[:3],
+        "manual_review": [row.get("Data Needed") for row in _manual_review_items(ctx)] or [confidence_subtitle],
+        "next_action": "Use a starter/watchlist posture until valuation, moat evidence, and manual-review items support higher conviction.",
+    }
+
+
+def _tearsheet_summary(ctx: dict) -> dict:
+    valuation_view, valuation_subtitle, _ = _valuation_view(ctx)
+    swing_view, swing_subtitle, _ = _swing_view(ctx)
+    confidence, confidence_subtitle, _ = _data_confidence(ctx)
+    return {
+        "decision": ctx.get("scoring", {}).get("recommendation") or "Unknown",
+        "valuation": f"{valuation_view}: {valuation_subtitle}",
+        "swing": f"{swing_view}: {swing_subtitle}",
+        "confidence": f"{confidence}: {confidence_subtitle}",
+        "next_action": "Review assumptions, reverse DCF, moat evidence, and data-quality plan before sizing.",
+    }
 
 
 def _top_clause_impacts(clauses: pd.DataFrame) -> pd.DataFrame:
@@ -1831,15 +2060,353 @@ def _data_lab(ctx: dict) -> None:
         )
 
 
+def _pa11r_snapshot(ctx: dict) -> None:
+    dataset = ctx["dataset"]
+    market = dataset.get("market_data", {})
+    scoring = ctx["scoring"]
+    dcf = ctx["base_dcf"]
+    reverse = ctx["reverse"]
+    moat = ctx["moat"]
+    investment_status = "supportive" if scoring.get("recommendation") == "Buy" else "warning" if scoring.get("recommendation") == "Avoid" else "caution"
+    swing_view, swing_subtitle, swing_status = _swing_view(ctx)
+    regime, regime_subtitle, regime_status = _market_regime(ctx)
+    valuation_view, valuation_subtitle, valuation_status = _valuation_view(ctx)
+    risk_level, risk_subtitle, risk_status = _risk_level(ctx)
+    confidence, confidence_subtitle, confidence_status = _data_confidence(ctx)
+    moat_class = _clean_classification(moat.get("classification"))
+    moat_score = moat.get("moat_score")
+
+    render_section(
+        "Decision Picture",
+        "Investment, swing, market regime, valuation, moat, risk, and data confidence are deliberately separated so a stock can be fundamentally expensive but still technically tradable.",
+        "Snapshot",
+    )
+    render_status_grid(
+        [
+            {
+                "title": "Investment View",
+                "value": scoring.get("recommendation") or "Unknown",
+                "subtitle": scoring.get("position_size_guidance"),
+                "status": investment_status,
+                "score": scoring.get("total_score"),
+                "confidence": scoring.get("conviction"),
+            },
+            {"title": "Swing View", "value": swing_view, "subtitle": swing_subtitle, "status": swing_status},
+            {"title": "Market Regime", "value": regime, "subtitle": regime_subtitle, "status": regime_status},
+        ]
+    )
+    render_status_grid(
+        [
+            {"title": "Valuation View", "value": valuation_view, "subtitle": valuation_subtitle, "status": valuation_status},
+            {"title": "Fair Value Gap", "value": fmt_percent(dcf.get("upside_downside_pct")), "subtitle": f"Fair value {fmt_per_share(dcf.get('fair_value_per_share'))} vs price {fmt_per_share(market.get('price'))}.", "status": valuation_status},
+            {"title": "Market-Implied Case", "value": reverse.get("market_case") or "Unknown", "subtitle": reverse.get("interpretation"), "status": "info"},
+            {"title": "Moat", "value": moat_class, "subtitle": moat.get("terminal_value_implication") or "Review Business Quality tab for moat evidence.", "status": "caution" if moat_class == "Unknown" else "supportive" if "wide" in moat_class.lower() or "narrow" in moat_class.lower() else "warning", "confidence": moat.get("confidence"), "help_text": f"Moat score: {format_short_score(moat_score)}"},
+            {"title": "Risk Level", "value": risk_level, "subtitle": risk_subtitle, "status": risk_status},
+            {"title": "Data Confidence", "value": confidence, "subtitle": confidence_subtitle, "status": confidence_status},
+        ]
+    )
+
+    c1, c2 = st.columns([0.58, 0.42])
+    with c1:
+        render_section("Price Action", "Current market context is secondary to the investment view, but it helps with timing and exposure.", "Trading Context")
+        st.plotly_chart(price_action_chart(dataset.get("price_history")), width="stretch", key="pa11r_snapshot_price")
+    with c2:
+        render_section("Accounting Reality Check", "Accounting warnings affect confidence and assumptions, not just score.", "Quality")
+        _accounting_reality_compact(ctx)
+
+    render_decision_summary(_decision_summary(ctx))
+    with st.expander("Top 4 risks and manual-review plan", expanded=False):
+        risk_rows = [{"Risk": risk, "Risk Type": "Business / Valuation / Data Quality", "Action": "Review before sizing"} for risk in _top_three_risks(ctx)[:4]]
+        show_table(pd.DataFrame(risk_rows), "No top risks available.")
+        show_table(_manual_review_plan_table(ctx), "No manual-review plan available.")
+    with st.expander("Market / Fundamentals Summary", expanded=False):
+        show_table(_finviz_decision_snapshot(market), "No market summary available.")
+    with st.expander("One-page tear sheet", expanded=False):
+        render_tearsheet(_tearsheet_summary(ctx))
+        render_copy_summary(_tearsheet_summary(ctx))
+
+
+def _assumption_update_log_editor(ctx: dict) -> None:
+    log = st.session_state.setdefault("assumption_update_log", [])
+    if not log:
+        log.extend(
+            [
+                {
+                    "timestamp": pd.Timestamp.utcnow().isoformat(),
+                    "case": "User Case",
+                    "model_line": "revenue_cagr",
+                    "old_value": ctx.get("base_assumptions", {}).get("revenue_cagr"),
+                    "new_value": ctx.get("base_assumptions", {}).get("revenue_cagr"),
+                    "evidence_source": "Manual",
+                    "evidence_summary": "Starter log entry for user-reviewed assumption changes.",
+                    "user_note": "",
+                    "confidence": "Manual Review",
+                    "fair_value_impact": UNAVAILABLE,
+                    "status": "inactive",
+                }
+            ]
+        )
+    edited = st.data_editor(pd.DataFrame(log), width="stretch", hide_index=True, num_rows="dynamic", key="assumption_update_editor")
+    st.session_state["assumption_update_log"] = edited.to_dict("records")
+
+
+def _assumption_workbench(ctx: dict) -> None:
+    render_section(
+        "Assumption Workbench",
+        "Map clauses, news, events, or manual evidence into DCF cases. Applied changes are tracked in an editable log before they affect the model.",
+        "Evidence to Model",
+    )
+    clauses = ctx.get("clauses")
+    if clauses is None or clauses.empty:
+        st.info("No extracted clause evidence in fast mode. Use Clause Map to fetch SEC filing evidence, or add manual entries below.")
+    else:
+        compact_cols = [column for column in ["topic", "model_line_affected", "direction", "confidence", "suggested_assumption_change"] if column in clauses]
+        show_table(clauses[compact_cols].head(8), "No clause evidence available.")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        apply_case = st.selectbox("Apply to case", ["Base Case", "Bull Case", "Bear Case", "User Case"], key="workbench_case")
+    with c2:
+        model_line = st.selectbox("Model line", ["revenue_cagr", "nopat_margin", "ocf_margin", "maintenance_capex_pct_revenue", "growth_capex_pct_revenue", "wacc", "terminal_multiple"], key="workbench_line")
+    with c3:
+        new_value = st.text_input("New value", value="", key="workbench_value")
+    with c4:
+        confidence = st.selectbox("Confidence", ["Manual Review", "Low", "Medium", "High"], key="workbench_confidence")
+    note = st.text_area("User note / evidence summary", value="", key="workbench_note", height=90)
+    if st.button("Add assumption update"):
+        st.session_state.setdefault("assumption_update_log", []).append(
+            {
+                "timestamp": pd.Timestamp.utcnow().isoformat(),
+                "case": apply_case,
+                "model_line": model_line,
+                "old_value": ctx.get("base_assumptions", {}).get(model_line),
+                "new_value": new_value,
+                "evidence_source": "User / Workbench",
+                "evidence_summary": note or "Manual evidence item",
+                "user_note": note,
+                "confidence": confidence,
+                "fair_value_impact": "Recalculate after activating",
+                "status": "inactive",
+            }
+        )
+        st.success("Assumption update added to the editable log.")
+    _assumption_update_log_editor(ctx)
+
+
+def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
+    render_section(
+        "Valuation Result",
+        "Reverse DCF is treated as the market benchmark. Compare your base/user case against what the current price already implies.",
+        "Valuation",
+    )
+    market = ctx["dataset"].get("market_data", {})
+    dcf = ctx["base_dcf"]
+    reverse = ctx["reverse"]
+    assumptions = ctx["base_assumptions"]
+    render_status_grid(
+        [
+            {"title": "Fair Value / Share", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": "Base-case DCF output.", "status": "info"},
+            {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Market price from provider snapshot.", "status": "neutral"},
+            {"title": "Upside / Downside", "value": fmt_percent(dcf.get("upside_downside_pct")), "subtitle": "Fair value versus market price.", "status": "supportive" if (dcf.get("upside_downside_pct") or 0) > 0 else "warning"},
+            {"title": "MOS Buy Price", "value": fmt_per_share(dcf.get("buy_price_after_margin_of_safety")), "subtitle": "Buy zone after margin of safety.", "status": "info"},
+            {"title": "Market-Implied Case", "value": reverse.get("market_case") or "Unknown", "subtitle": reverse.get("interpretation"), "status": "info"},
+            {"title": "Terminal Value Weight", "value": fmt_percent(dcf.get("terminal_value_weight_pct")), "subtitle": "Higher weight means more terminal sensitivity.", "status": "warning" if (dcf.get("terminal_value_weight_pct") or 0) > 0.65 else "neutral"},
+        ],
+        numeric=True,
+    )
+    show_table(
+        pd.DataFrame(
+            [
+                {"Case": "Bear Case", "Revenue CAGR": max((assumptions.get("revenue_cagr") or 0) - 0.03, -0.2), "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": max((assumptions.get("terminal_multiple") or 0) - 2, 0), "Read": "Stress lower growth / multiple"},
+                {"Case": "Base Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": assumptions.get("terminal_multiple"), "Read": "Dashboard base case"},
+                {"Case": "Bull Case", "Revenue CAGR": (assumptions.get("revenue_cagr") or 0) + 0.05, "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": (assumptions.get("terminal_multiple") or 0) + 2, "Read": "Evidence-supported upside case"},
+                {"Case": "User Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": assumptions.get("terminal_multiple"), "Read": "Editable through assumption controls"},
+                {"Case": "Market-Implied Case", "Revenue CAGR": reverse.get("implied_revenue_cagr"), "NOPAT Margin": reverse.get("implied_nopat_margin"), "Terminal Multiple": reverse.get("implied_terminal_multiple"), "Read": reverse.get("market_case")},
+            ]
+        ),
+        "Scenario comparison unavailable.",
+    )
+    profile = infer_stock_profile(ctx["dataset"])
+    st.info(f"Stock-profile assumption group: {profile}. The control panel below uses existing assumptions until profile-specific operating KPIs are available.")
+    _valuation(ctx)
+    if analyst_details:
+        with st.expander("Assumption Workbench / Update Log", expanded=True):
+            _assumption_workbench(ctx)
+
+
+def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
+    render_section(
+        "Evidence & Assumptions",
+        "Use this tab to connect filing clauses and manual evidence to DCF assumptions. Tables stay behind expanders unless analyst details are enabled.",
+        "Evidence",
+    )
+    _assumption_workbench(ctx)
+    with st.expander("Clause / News / Event Map", expanded=analyst_details):
+        _clause_annotation_map(ctx)
+    with st.expander("Filing Metadata and Guidance", expanded=analyst_details):
+        _evidence(ctx)
+
+
+def _pa11r_business_quality_tab(ctx: dict, analyst_details: bool) -> None:
+    render_section(
+        "Business Quality",
+        "Moat, accounting quality, new entrant risk, and thesis breakers are separated from pure valuation.",
+        "Business Quality",
+    )
+    moat = ctx["moat"]
+    render_status_grid(
+        [
+            {"title": "Moat", "value": _clean_classification(moat.get("classification")), "subtitle": moat.get("terminal_value_implication"), "status": "caution" if "unknown" in _clean_classification(moat.get("classification")).lower() else "supportive", "confidence": moat.get("confidence"), "help_text": f"Moat score: {format_short_score(moat.get('moat_score'))}"},
+            {"title": "Accounting Quality", "value": ctx.get("accounting_interpretation", {}).get("cards", {}).get("OCF Quality") or "Unknown", "subtitle": "OCF / CAPEX / NOPAT interpretation affects DCF confidence.", "status": "caution"},
+            {"title": "Risk Level", "value": _risk_level(ctx)[0], "subtitle": _risk_level(ctx)[1], "status": _risk_level(ctx)[2]},
+        ]
+    )
+    _company_story(ctx)
+    _accounting_quality(ctx)
+    _moat_risks(ctx)
+
+
+def _pa11r_management_tab(ctx: dict, analyst_details: bool) -> None:
+    render_section(
+        "Management & Capital Allocation",
+        "Management credibility, SBC, M&A quality, compensation alignment, and peer context live here.",
+        "Capital Allocation",
+    )
+    _ma_management_sbc(ctx)
+    with st.expander("Multiples / Peer Context", expanded=analyst_details):
+        _multiples_peers(ctx)
+
+
+def _sources_data_quality_tab(ctx: dict, analyst_details: bool) -> None:
+    confidence, subtitle, status = _data_confidence(ctx)
+    render_section(
+        "Sources & Data Quality",
+        "Missing data is a controlled state. It creates a review/fetch plan instead of showing scary top-level errors.",
+        "Data Quality",
+    )
+    render_status_grid(
+        [
+            {"title": "Data Coverage", "value": confidence, "subtitle": subtitle, "status": status},
+            {"title": "Manual Review Items", "value": len(_manual_review_items(ctx)), "subtitle": "Debt, segment, moat, and CAPEX split items are tracked here.", "status": "caution" if _manual_review_items(ctx) else "supportive"},
+            {"title": "Provider Sources", "value": ", ".join(ctx["dataset"].get("sources", [])) or "Unavailable", "subtitle": "SEC / Finviz / yfinance availability.", "status": "info"},
+        ]
+    )
+    show_table(_manual_review_plan_table(ctx), "No manual-review plan available.")
+    with st.expander("Data Coverage Table", expanded=analyst_details):
+        show_table(_data_coverage(ctx["dataset"], ctx["historicals"]), "Data coverage unavailable.")
+        show_table(_data_quality_table(ctx), "No data-quality notes.")
+    with st.expander("Financial Reports", expanded=False):
+        _financial_reports(ctx)
+    if analyst_details:
+        _data_lab(ctx)
+
+
+def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
+    dataset = ctx["dataset"]
+    render_cockpit_header(
+        f"{dataset.get('ticker')} - {dataset.get('company') or 'Company unavailable'}",
+        f"{dataset.get('sector') or 'Sector unavailable'} / {dataset.get('industry') or 'Industry unavailable'}",
+        "PA-11R Hybrid Investment Cockpit",
+    )
+    _source_status(dataset)
+    show_warnings(_critical_warnings(dataset.get("warnings", [])))
+    tabs = st.tabs(
+        [
+            "Snapshot",
+            "Valuation",
+            "Evidence & Assumptions",
+            "Business Quality",
+            "Management & Capital Allocation",
+            "Sources & Data Quality",
+        ]
+    )
+    with tabs[0]:
+        _pa11r_snapshot(ctx)
+    with tabs[1]:
+        _pa11r_valuation_tab(ctx, analyst_details)
+    with tabs[2]:
+        _pa11r_evidence_assumptions_tab(ctx, analyst_details)
+    with tabs[3]:
+        _pa11r_business_quality_tab(ctx, analyst_details)
+    with tabs[4]:
+        _pa11r_management_tab(ctx, analyst_details)
+    with tabs[5]:
+        _sources_data_quality_tab(ctx, analyst_details)
+
+
+def _render_mr1_lite(ctx: dict, analyst_details: bool) -> None:
+    dataset = ctx["dataset"]
+    market = dataset.get("market_data", {})
+    swing, swing_subtitle, swing_status = _swing_view(ctx)
+    regime, regime_subtitle, regime_status = _market_regime(ctx)
+    volume, volume_subtitle, volume_status = _volume_context(ctx)
+    vol, vol_subtitle, vol_status = _swing_volatility(ctx)
+    confidence, confidence_subtitle, confidence_status = _data_confidence(ctx)
+    render_cockpit_header(
+        f"{dataset.get('ticker')} MR-1 Lite",
+        "Market regime, volume, relative context, volatility, and suggested swing exposure. This is separate from the PA-11R investment view.",
+        "MR-1 Lite Trading Cockpit",
+    )
+    tabs = st.tabs(["Snapshot", "Trading Setup", "Regime & Relative Context", "Volume & Volatility", "Sources & Data Quality"])
+    with tabs[0]:
+        render_status_grid(
+            [
+                {"title": "Swing View", "value": swing, "subtitle": swing_subtitle, "status": swing_status},
+                {"title": "Market Regime", "value": regime, "subtitle": regime_subtitle, "status": regime_status},
+                {"title": "Suggested Exposure", "value": "Starter / Reduced" if swing_status != "supportive" else "Normal Swing", "subtitle": "Exposure is based on setup quality and data confidence.", "status": swing_status},
+                {"title": "Volume Context", "value": volume, "subtitle": volume_subtitle, "status": volume_status},
+                {"title": "Relative Context", "value": "Supportive" if (market.get("sma20") or 0) > 0 else "Neutral", "subtitle": f"SMA20 {fmt_percent(market.get('sma20'))}; SMA50 {fmt_percent(market.get('sma50'))}.", "status": "supportive" if (market.get("sma20") or 0) > 0 else "neutral"},
+                {"title": "Data Confidence", "value": confidence, "subtitle": confidence_subtitle, "status": confidence_status},
+            ]
+        )
+        render_decision_summary(
+            {
+                "what_matters": [f"Swing view is {swing}.", f"Market regime is {regime}.", f"Volume context is {volume}."],
+                "supporting": [swing_subtitle, regime_subtitle],
+                "contradicting": [volume_subtitle if volume_status in {"warning", "negative"} else vol_subtitle],
+                "manual_review": [confidence_subtitle],
+                "next_action": "Trade only when price action, volume, and regime align; otherwise wait or use reduced exposure.",
+            }
+        )
+    with tabs[1]:
+        render_section("Trading Setup", "Price action and exposure controls for swing decisions.", "MR-1")
+        render_status_grid(
+            [
+                {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Latest provider price.", "status": "info"},
+                {"title": "Change", "value": fmt_percent(market.get("change")), "subtitle": "Current session / provider change.", "status": "supportive" if (market.get("change") or 0) > 0 else "warning"},
+                {"title": "ATR", "value": fmt_ratio(market.get("atr")), "subtitle": "Volatility sizing input.", "status": "neutral"},
+                {"title": "Beta", "value": fmt_ratio(market.get("beta")), "subtitle": "Market sensitivity.", "status": "warning" if (market.get("beta") or 0) > 1.25 else "neutral"},
+            ],
+            numeric=True,
+        )
+        st.plotly_chart(price_action_chart(dataset.get("price_history")), width="stretch", key="mr1_price")
+    with tabs[2]:
+        render_section("Regime & Relative Context", "Use trend and benchmark-like fields to avoid fighting the tape.", "MR-1")
+        show_table(_finviz_decision_snapshot(market), "No relative context available.")
+    with tabs[3]:
+        render_section("Volume & Volatility", "Volume confirms or contradicts the move; volatility controls position size.", "MR-1")
+        render_status_grid(
+            [
+                {"title": "Volume Context", "value": volume, "subtitle": volume_subtitle, "status": volume_status},
+                {"title": "Swing Volatility", "value": vol, "subtitle": vol_subtitle, "status": vol_status},
+                {"title": "Short Float", "value": fmt_percent(market.get("short_float")), "subtitle": "High short interest can increase volatility.", "status": "warning" if (market.get("short_float") or 0) > 0.15 else "neutral"},
+            ]
+        )
+    with tabs[4]:
+        _sources_data_quality_tab(ctx, analyst_details)
+
+
 def render_dashboard():
     st.set_page_config(page_title="PA-11R Hybrid", layout="wide")
     _css()
+    apply_design_system()
 
     with st.sidebar:
         st.header("Research Setup")
+        dashboard_mode = st.radio("Dashboard", ["PA-11R Hybrid", "MR-1 Lite"], horizontal=False)
         ticker = st.text_input("Ticker", value="AAPL").upper().strip()
         peer_override = st.text_input("Peer override", value="", help="Comma-separated tickers")
         fetch_peers = st.toggle("Fetch peers", value=True)
+        analyst_details = st.toggle("Show analyst details", value=False)
         debug = st.toggle("Show data lab", value=False)
         evidence_key = f"evidence_loaded_{ticker or 'EMPTY'}"
         st.caption("Fast mode loads SEC JSON metadata only. Evidence mode downloads full filing text once and reuses cache.")
@@ -1864,61 +2431,11 @@ def render_dashboard():
     with st.spinner(spinner_text):
         ctx = _build_context(ticker, peer_override, fetch_peers, include_deep_sec=include_deep_sec)
 
-    dataset = ctx["dataset"]
-    st.markdown(
-        f"""
-        <div class="pa-header">
-            <p class="pa-title">{dataset.get("ticker")} - {dataset.get("company") or "Company unavailable"}</p>
-            <p class="pa-subtle">{dataset.get("sector") or "Sector unavailable"} / {dataset.get("industry") or "Industry unavailable"}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    _source_status(dataset)
     st.caption("Mode: SEC evidence loaded" if include_deep_sec else "Mode: fast SEC JSON snapshot")
-    show_warnings(_critical_warnings(dataset.get("warnings", [])))
-    _data_coverage_expander(ctx)
-    _summary_bar(ctx)
-
-    tabs = [
-        "Snapshot",
-        "Company Story",
-        "Financials",
-        "Interactive DCF",
-        "Reverse DCF",
-        "Multiples / Peers",
-        "Clause Map",
-        "Accounting Quality",
-        "M&A / Mgmt / SBC",
-        "Moat / Risks",
-        "Final Decision",
-    ]
+    if dashboard_mode == "MR-1 Lite":
+        _render_mr1_lite(ctx, analyst_details or debug)
+    else:
+        _render_pa11r_hybrid(ctx, analyst_details or debug)
     if debug:
-        tabs.append("Data Lab")
-    selected_tabs = st.tabs(tabs)
-
-    with selected_tabs[0]:
-        _overview(ctx)
-    with selected_tabs[1]:
-        _company_story(ctx)
-    with selected_tabs[2]:
-        _financial_reports(ctx)
-    with selected_tabs[3]:
-        _valuation(ctx)
-    with selected_tabs[4]:
-        _reverse_dcf_tab(ctx)
-    with selected_tabs[5]:
-        _multiples_peers(ctx)
-    with selected_tabs[6]:
-        _clause_annotation_map(ctx)
-    with selected_tabs[7]:
-        _accounting_quality(ctx)
-    with selected_tabs[8]:
-        _ma_management_sbc(ctx)
-    with selected_tabs[9]:
-        _moat_risks(ctx)
-    with selected_tabs[10]:
-        _final_decision(ctx)
-    if debug:
-        with selected_tabs[11]:
+        with st.expander("Debug Data Lab", expanded=False):
             _data_lab(ctx)

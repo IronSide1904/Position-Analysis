@@ -203,6 +203,21 @@ def fmt_dollar_millions(value) -> str:
     return fmt_dollar(value, scale="M")
 
 
+def fmt_money(value) -> str:
+    """
+    Dashboard money formatter.
+
+    < $1B -> $XM
+    >= $1B -> $XB
+    """
+    number = _as_float(value)
+    if number is None:
+        return UNAVAILABLE
+    if abs(number) >= 1e9:
+        return f"${number / 1e9:,.1f}B"
+    return f"${number / 1e6:,.0f}M"
+
+
 def fmt_dollar_billions(value, decimals: int = 2) -> str:
     """
     Format dollar values in billions.
