@@ -54,7 +54,12 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         capex = maintenance_capex + growth_capex
         working_capital = current_revenue * working_capital_pct
         fcff = nopat + da - maintenance_capex - working_capital
-        fcf = fcff if dcf_mode == "FCFF" else ocf - capex
+        if dcf_mode == "FCFF":
+            fcf = fcff
+        elif dcf_mode == "NOPAT":
+            fcf = nopat
+        else:
+            fcf = ocf - capex
         pv = fcf / ((1 + wacc) ** year)
         discounted_fcfs.append(pv)
         rows.append(

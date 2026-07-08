@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from ui.formatting import UNAVAILABLE, fmt_dollar, fmt_multiple, fmt_number, fmt_percent, fmt_per_share, fmt_score, fmt_shares
+from ui.formatting import UNAVAILABLE, fmt_dollar_millions, fmt_multiple, fmt_number, fmt_percent, fmt_per_share, fmt_score, fmt_shares
 
 
 MONEY_HINTS = {
@@ -45,7 +45,7 @@ PCT_HINTS = {
 
 
 def fmt_money(value):
-    return fmt_dollar(value, scale="M")
+    return fmt_dollar_millions(value)
 
 
 def fmt_pct(value):

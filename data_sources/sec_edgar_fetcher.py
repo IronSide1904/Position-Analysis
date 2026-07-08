@@ -35,8 +35,33 @@ US_GAAP_TAGS = {
     ],
     "depreciation_amortization": ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation"],
     "cash": ["CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"],
-    "debt_current": ["LongTermDebtCurrent", "LongTermDebtAndFinanceLeaseObligationsCurrent", "ShortTermBorrowings"],
-    "debt_noncurrent": ["LongTermDebtNoncurrent", "LongTermDebtAndFinanceLeaseObligationsNoncurrent"],
+    "debt_current": [
+        "LongTermDebtCurrent",
+        "LongTermDebtAndFinanceLeaseObligationsCurrent",
+        "FinanceLeaseLiabilityCurrent",
+        "OperatingLeaseLiabilityCurrent",
+        "ShortTermBorrowings",
+        "ShortTermDebt",
+        "CurrentPortionOfLongTermDebt",
+        "CurrentPortionOfLongTermDebtAndFinanceLeaseObligations",
+        "DebtCurrent",
+    ],
+    "debt_noncurrent": [
+        "LongTermDebtNoncurrent",
+        "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
+        "FinanceLeaseLiabilityNoncurrent",
+        "OperatingLeaseLiabilityNoncurrent",
+        "LongTermDebt",
+        "LongTermBorrowings",
+    ],
+    "total_debt": [
+        "LongTermDebtAndFinanceLeaseObligations",
+        "DebtAndFinanceLeaseObligations",
+        "LongTermDebt",
+        "ShortTermBorrowings",
+        "DebtCurrent",
+    ],
+    "assets": ["Assets"],
     "shares_outstanding": [
         "EntityCommonStockSharesOutstanding",
         "WeightedAverageNumberOfDilutedSharesOutstanding",
@@ -258,7 +283,8 @@ def normalize_companyfacts_financials(companyfacts: dict) -> dict:
         error = companyfacts.get("error", "SEC companyfacts unavailable") if isinstance(companyfacts, dict) else "SEC companyfacts unavailable"
         return {"available": False, "source": "SEC companyfacts", "metrics": {}, "warnings": [error]}
     metrics = {name: extract_fact_dataframe(companyfacts, tags) for name, tags in US_GAAP_TAGS.items()}
-    warnings_out = [f"SEC companyfacts missing {name}" for name, df in metrics.items() if df.empty]
+    quiet_missing = {"debt_current", "debt_noncurrent", "total_debt"}
+    warnings_out = [f"SEC companyfacts missing {name}" for name, df in metrics.items() if df.empty and name not in quiet_missing]
     return {"available": any(not df.empty for df in metrics.values()), "source": "SEC companyfacts", "metrics": metrics, "warnings": warnings_out}
 
 
@@ -277,17 +303,30 @@ def extract_core_financials_from_companyfacts(companyfacts: dict) -> dict:
     normalized = normalize_companyfacts_financials(companyfacts)
     metrics = normalized.get("metrics", {})
     out = {}
-    debt_current = _latest_metric_value(metrics, "debt_current") or 0
-    debt_noncurrent = _latest_metric_value(metrics, "debt_noncurrent") or 0
+    debt_current = _latest_metric_value(metrics, "debt_current")
+    debt_noncurrent = _latest_metric_value(metrics, "debt_noncurrent")
+    total_debt = _latest_metric_value(metrics, "total_debt")
+    if debt_current is not None or debt_noncurrent is not None:
+        debt_total = float(debt_current or 0) + float(debt_noncurrent or 0)
+        debt_confidence = "reported"
+        debt_source = "SEC companyfacts current + noncurrent debt"
+    elif total_debt is not None:
+        debt_total = total_debt
+        debt_confidence = "reported"
+        debt_source = "SEC companyfacts total debt fallback"
+    else:
+        debt_total = None
+        debt_confidence = "unavailable"
+        debt_source = "Manual review required"
     for name in list(US_GAAP_TAGS) + ["debt_total"]:
-        value = debt_current + debt_noncurrent if name == "debt_total" else _latest_metric_value(metrics, name)
+        value = debt_total if name == "debt_total" else _latest_metric_value(metrics, name)
         out[name] = {
             "value": value,
             "period": None,
             "form": None,
             "filed": None,
-            "source": "SEC companyfacts",
-            "confidence": "reported" if value is not None else "unavailable",
+            "source": debt_source if name in {"debt", "debt_total"} else "SEC companyfacts",
+            "confidence": debt_confidence if name == "debt_total" else "reported" if value is not None else "unavailable",
         }
     out["shares"] = out["shares_outstanding"]
     out["debt"] = out["debt_total"]

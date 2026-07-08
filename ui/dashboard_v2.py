@@ -150,14 +150,60 @@ def _css() -> None:
             border-radius: 8px;
             padding: 0.75rem 0.85rem;
             background: #fbfcfe;
+            color: #111827;
             margin-bottom: 0.75rem;
         }
+        .pa-box * { color: #111827 !important; }
         .pa-box-title {
             color: #334155;
             font-size: 0.86rem;
             font-weight: 700;
             margin-bottom: 0.25rem;
         }
+        .pa-card {
+            background-color: #111827;
+            border: 1px solid #374151;
+            border-radius: 10px;
+            padding: 16px;
+            color: #F9FAFB;
+            margin-bottom: 0.75rem;
+        }
+        .pa-card * { color: #F9FAFB !important; }
+        .pa-card-light {
+            background-color: #F9FAFB;
+            border: 1px solid #D1D5DB;
+            border-radius: 10px;
+            padding: 16px;
+            color: #111827;
+            margin-bottom: 0.75rem;
+        }
+        .pa-card-light * { color: #111827 !important; }
+        .pa-muted { color: #9CA3AF !important; }
+        .pa-warning {
+            background-color: #FEF3C7;
+            color: #111827 !important;
+            border-left: 4px solid #F59E0B;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .pa-risk {
+            background-color: #FEE2E2;
+            color: #111827 !important;
+            border-left: 4px solid #EF4444;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .pa-success {
+            background-color: #DCFCE7;
+            color: #111827 !important;
+            border-left: 4px solid #22C55E;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .pa-warning *, .pa-risk *, .pa-success * { color: #111827 !important; }
         @media (max-width: 1100px) {
             .pa-summary-bar { grid-template-columns: repeat(4, minmax(110px, 1fr)); }
         }
@@ -188,6 +234,7 @@ def _source_status(dataset: dict) -> None:
 def _data_coverage(dataset: dict, historicals: pd.DataFrame) -> pd.DataFrame:
     market = dataset.get("market_data", {})
     sec = dataset.get("financials", {}).get("sec", {})
+    debt = sec.get("debt", {}) if isinstance(sec, dict) else {}
     rows = [
         {"area": "Price history", "status": "Loaded" if not dataset.get("price_history", pd.DataFrame()).empty else "Missing", "source": "yfinance"},
         {"area": "Company profile", "status": "Loaded" if dataset.get("company") else "Missing", "source": ", ".join(dataset.get("sources", []))},
@@ -197,6 +244,9 @@ def _data_coverage(dataset: dict, historicals: pd.DataFrame) -> pd.DataFrame:
         {"area": "SEC companyfacts", "status": "Loaded" if sec.get("revenue", {}).get("value") else "Missing", "source": "SEC"},
         {"area": "Full filing text", "status": "Loaded" if dataset.get("filing_texts") else "Not loaded", "source": "SEC evidence mode"},
         {"area": "Historical model table", "status": "Loaded" if historicals is not None and not historicals.empty else "Missing", "source": "SEC / yfinance"},
+        {"area": "Debt detail", "status": "Loaded" if debt.get("confidence") == "reported" else "Manual review required", "source": debt.get("source") or "SEC / yfinance / manual review"},
+        {"area": "Segment data", "status": "Manual review required", "source": "10-K segment note / company IR"},
+        {"area": "Maintenance CAPEX split", "status": "Proxy-based", "source": "Accounting interpretation / manual review"},
     ]
     return pd.DataFrame(rows)
 
@@ -279,6 +329,107 @@ def _summary_bar(ctx: dict) -> None:
         )
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def _notice(message: str, kind: str = "warning") -> None:
+    cls = {"warning": "pa-warning", "risk": "pa-risk", "success": "pa-success"}.get(kind, "pa-warning")
+    st.markdown(f'<div class="{cls}">{message}</div>', unsafe_allow_html=True)
+
+
+def _manual_review_items(ctx: dict) -> list[dict]:
+    dataset = ctx.get("dataset", {})
+    filings = dataset.get("latest_filings") or []
+    latest = filings[0] if filings else {}
+    source_url = latest.get("document_url") or latest.get("filing_url") or "https://www.sec.gov/edgar/search/"
+    sec_fin = dataset.get("financials", {}).get("sec", {})
+    debt = sec_fin.get("debt", {}) if isinstance(sec_fin, dict) else {}
+    items = []
+    if debt.get("confidence") != "reported":
+        items.append(
+            {
+                "Data Needed": "Debt detail",
+                "Reason": "SEC companyfacts did not include reliable current/noncurrent or total debt tags.",
+                "Primary Source": "Latest 10-K or 10-Q",
+                "Section to Review": "Balance Sheet; Debt Note; Borrowings / Credit Facility Note; Liquidity and Capital Resources",
+                "Keywords": "debt, borrowings, credit facility, term loan, revolving credit, maturity",
+                "Source URL": source_url,
+                "Fallback Sources": "SEC filing; company investor relations; annual report; earnings release",
+                "Dashboard Action": "Manual Review Required",
+            }
+        )
+    if ctx.get("accounting_interpretation", {}).get("capex", {}).get("confidence") != "High":
+        items.append(
+            {
+                "Data Needed": "Maintenance vs growth CAPEX split",
+                "Reason": "The split is usually undisclosed and may be proxy-based.",
+                "Primary Source": "Latest 10-K or 10-Q",
+                "Section to Review": "Capital expenditures; Liquidity and Capital Resources; PP&E note",
+                "Keywords": "maintenance capital, growth capital, capacity expansion, facility, equipment, infrastructure",
+                "Source URL": source_url,
+                "Fallback Sources": "SEC filing; earnings call transcript; investor presentation",
+                "Dashboard Action": "Manual Review Required",
+            }
+        )
+    return items
+
+
+def _data_quality_table(ctx: dict) -> pd.DataFrame:
+    dataset = ctx.get("dataset", {})
+    sec_fin = dataset.get("financials", {}).get("sec", {})
+    debt = sec_fin.get("debt", {}) if isinstance(sec_fin, dict) else {}
+    issues = []
+    if debt.get("confidence") != "reported":
+        issues.append(
+            {
+                "Issue": "Debt detail unavailable from SEC companyfacts",
+                "Meaning": "Specific XBRL debt tags were not found. This does not mean debt is zero.",
+                "Impact": "Net debt and EV bridge may be lower confidence.",
+                "Handled By": "Trying alternate SEC debt tags, total debt tag, yfinance totalDebt, and manual review guidance.",
+                "Where to Verify": "10-K / 10-Q balance sheet, Debt note, Liquidity and Capital Resources.",
+            }
+        )
+    if not dataset.get("evidence_loaded"):
+        issues.append(
+            {
+                "Issue": "Full filing text not loaded",
+                "Meaning": "Fast mode uses metadata and structured facts only.",
+                "Impact": "Clause, management, M&A, and risk context is lower confidence.",
+                "Handled By": "Load SEC evidence when deeper text review is needed.",
+                "Where to Verify": "Latest 10-K / 10-Q / DEF 14A.",
+            }
+        )
+    if not issues:
+        issues.append(
+            {
+                "Issue": "No major data-quality issues detected",
+                "Meaning": "Core providers returned enough data for the cockpit.",
+                "Impact": "Normal model sensitivity still applies.",
+                "Handled By": "SEC / Finviz / yfinance source coverage.",
+                "Where to Verify": "Source evidence table.",
+            }
+        )
+    return pd.DataFrame(issues)
+
+
+def _critical_warnings(warnings: list[str]) -> list[str]:
+    quiet_patterns = ["SEC companyfacts missing debt_current", "SEC companyfacts missing debt_noncurrent", "SEC companyfacts missing total_debt"]
+    return [warning for warning in warnings or [] if not any(pattern in str(warning) for pattern in quiet_patterns)]
+
+
+def _data_coverage_expander(ctx: dict) -> None:
+    dataset = ctx["dataset"]
+    with st.expander("Data Coverage / Source Quality", expanded=False):
+        show_table(_data_coverage(dataset, ctx["historicals"]), "Data coverage unavailable.")
+        show_table(_data_quality_table(ctx), "No data-quality notes.")
+        manual_items = _manual_review_items(ctx)
+        if manual_items:
+            st.subheader("Manual Review Required")
+            show_table(pd.DataFrame(manual_items), "No manual review items.")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.button("Open SEC filing", disabled=True)
+            c2.button("Search filing text", disabled=True)
+            c3.button("Search company IR", disabled=True)
+            c4.button("Search earnings release", disabled=True)
 
 
 def _finviz_decision_snapshot(market: dict) -> pd.DataFrame:
@@ -543,6 +694,36 @@ def _accounting_reality_check(ctx: dict, expanded: bool = True) -> None:
         )
 
 
+def _accounting_reality_compact(ctx: dict) -> None:
+    interpretation = ctx.get("accounting_interpretation") or {}
+    cards = interpretation.get("cards", {})
+    st.markdown('<div class="pa-section-title">Accounting Reality Check</div>', unsafe_allow_html=True)
+    st.caption(
+        "Reported D&A, OCF, CAPEX, NOPAT, and FCF are inputs that need business-model, industry, and clause interpretation before valuation changes."
+    )
+    metric_row(
+        [
+            ("D&A Proxy", cards.get("D&A Reliability as Maintenance CAPEX Proxy"), "text"),
+            ("OCF Quality", cards.get("OCF Quality"), "text"),
+            ("CAPEX", cards.get("CAPEX Classification"), "text"),
+        ]
+    )
+    metric_row(
+        [
+            ("NOPAT Quality", cards.get("NOPAT Quality"), "text"),
+            ("Distortion", cards.get("Main Accounting Distortion"), "text"),
+            ("Confidence Impact", interpretation.get("valuation_confidence"), "text"),
+        ]
+    )
+    for warning in (interpretation.get("warnings") or [])[:3]:
+        _notice(str(warning), "warning")
+    with st.expander("Show full accounting interpretation"):
+        show_table(
+            build_accounting_interpretation_table(interpretation, ctx.get("historicals")),
+            "Accounting interpretation unavailable.",
+        )
+
+
 def _style_financial_model_table(df: pd.DataFrame):
     if df is None or df.empty:
         return df
@@ -667,30 +848,38 @@ def _assumption_editor(base: dict) -> dict:
         pct_value = min(max(pct_value, minimum * 100), maximum * 100)
         return st.slider(label, minimum * 100, maximum * 100, pct_value, step, format="%.1f%%") / 100
 
-    st.markdown('<div class="pa-section-title">DCF Controls</div>', unsafe_allow_html=True)
-    dcf_mode = st.segmented_control("DCF mode", ["FCFF", "FCF"], default=str(base.get("dcf_mode", "FCFF")).upper())
-    forecast_years = st.slider("Forecast years", 5, 10, int(base.get("forecast_years", 5)), 1)
+    st.markdown('<div class="pa-section-title">Step 1: Valuation Mode</div>', unsafe_allow_html=True)
+    dcf_mode = st.segmented_control("Valuation mode", ["FCFF", "FCF", "NOPAT"], default=str(base.get("dcf_mode", "FCFF")).upper())
+    st.caption("Changing assumptions recalculates fair value immediately. Filing-derived assumption changes are not applied automatically unless you confirm them.")
+    st.markdown('<div class="pa-section-title">Step 2: Adjust Assumptions</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
+        st.markdown("**Growth**")
+        forecast_years = st.slider("Forecast years", 5, 10, int(base.get("forecast_years", 5)), 1)
         revenue_cagr = pct_slider("Revenue CAGR", -0.20, 0.60, base.get("revenue_cagr", 0.08))
+        st.markdown("**Margins**")
         gross_margin = pct_slider("Gross margin", -0.20, 0.80, base.get("gross_margin", 0.45))
         ebit_margin = pct_slider("EBIT margin", -0.20, 0.60, base.get("operating_margin", 0.15))
-        tax_rate = pct_slider("Tax rate", 0.00, 0.40, base.get("tax_rate", 0.21))
-        sm_pct = pct_slider("S&M / revenue", 0.00, 0.50, base.get("sm_pct_revenue", 0.0))
-        rd_pct = pct_slider("R&D / revenue", 0.00, 0.50, base.get("rd_pct_revenue", 0.0))
-        ga_pct = pct_slider("G&A / revenue", 0.00, 0.50, base.get("ga_pct_revenue", 0.0))
         ocf_margin = pct_slider("OCF margin", -0.20, 0.60, base.get("ocf_margin", 0.16))
+        tax_rate = pct_slider("Tax rate", 0.00, 0.40, base.get("tax_rate", 0.21))
+        with st.expander("Operating cost detail"):
+            sm_pct = pct_slider("S&M / revenue", 0.00, 0.50, base.get("sm_pct_revenue", 0.0))
+            rd_pct = pct_slider("R&D / revenue", 0.00, 0.50, base.get("rd_pct_revenue", 0.0))
+            ga_pct = pct_slider("G&A / revenue", 0.00, 0.50, base.get("ga_pct_revenue", 0.0))
     with c2:
+        st.markdown("**Reinvestment**")
         maint_capex = pct_slider("Maintenance CAPEX / revenue", 0.00, 0.25, base.get("maintenance_capex_pct_revenue", 0.03))
         growth_capex = pct_slider("Growth CAPEX / revenue", 0.00, 0.35, base.get("growth_capex_pct_revenue", 0.02))
         working_capital = pct_slider("Working capital / revenue", -0.10, 0.20, base.get("working_capital_pct_revenue", 0.01))
+        st.markdown("**Dilution**")
         sbc_pct = pct_slider("SBC / revenue", 0.00, 0.30, base.get("sbc_pct_revenue", 0.0))
+        share_growth = pct_slider("Diluted share growth", -0.10, 0.20, base.get("diluted_share_growth", 0.0))
+        shares = st.number_input("Diluted shares", value=float(base.get("diluted_shares") or 0), min_value=0.0, step=1_000_000.0, format="%.0f")
+        st.markdown("**Discount / Terminal**")
         wacc = pct_slider("WACC", 0.04, 0.20, base.get("wacc", 0.095))
         terminal_growth = pct_slider("Terminal growth", -0.02, 0.06, base.get("terminal_growth", 0.025))
-        terminal_multiple = st.slider("Terminal multiple", 4.0, 35.0, float(base.get("terminal_multiple", 15.0)), 1.0, format="%.0f")
-        share_growth = pct_slider("Diluted share growth", -0.10, 0.20, base.get("diluted_share_growth", 0.0))
-    shares = st.number_input("Diluted shares", value=float(base.get("diluted_shares") or 0), min_value=0.0, step=1_000_000.0, format="%.0f")
-    margin_of_safety = pct_slider("Margin of safety", 0.0, 0.6, base.get("margin_of_safety", 0.30), step=5.0)
+        terminal_multiple = st.slider("Terminal multiple", 4.0, 35.0, float(base.get("terminal_multiple", 15.0)), 0.5, format="%.1f")
+        margin_of_safety = pct_slider("Margin of safety", 0.0, 0.6, base.get("margin_of_safety", 0.30), step=5.0)
     nopat_margin = ebit_margin * (1 - tax_rate)
     return {
         **base,
@@ -842,7 +1031,7 @@ def _overview(ctx: dict) -> None:
     with c1:
         st.plotly_chart(price_action_chart(dataset.get("price_history")), width="stretch", key="v2_price_action")
     with c2:
-        _accounting_reality_check(ctx, expanded=True)
+        _accounting_reality_compact(ctx)
 
     with st.expander("Finviz Decision Snapshot"):
         show_table(_finviz_decision_snapshot(market), "No Finviz decision fields available.")
@@ -850,7 +1039,7 @@ def _overview(ctx: dict) -> None:
 
 def _valuation(ctx: dict) -> None:
     market = ctx["dataset"].get("market_data", {})
-    st.caption("Interactive DCF: assumptions on the left, valuation impact on the right, detailed model below.")
+    st.caption("Interactive DCF workflow: choose valuation mode, adjust assumptions, see valuation impact, then review detailed model.")
     left, right = st.columns([0.52, 0.48])
     with left:
         assumptions = _assumption_editor(ctx["base_assumptions"])
@@ -877,7 +1066,7 @@ def _valuation(ctx: dict) -> None:
     accounting_flags = _accounting_assumption_flags(ctx.get("accounting_interpretation"), assumptions)
 
     with right:
-        st.markdown('<div class="pa-section-title">Valuation Output</div>', unsafe_allow_html=True)
+        st.markdown('<div class="pa-section-title">Step 3: Valuation Impact</div>', unsafe_allow_html=True)
         metric_row(
             [
                 ("Fair Value / Share", user_dcf.get("fair_value_per_share"), "per_share"),
@@ -899,14 +1088,21 @@ def _valuation(ctx: dict) -> None:
                 ("DCF Confidence", ctx.get("accounting_interpretation", {}).get("valuation_confidence"), "text"),
             ]
         )
+        if user_dcf.get("upside_downside_pct") is not None:
+            if user_dcf.get("upside_downside_pct") < 0:
+                _notice("Overvalued under current assumptions.", "risk")
+            else:
+                _notice("Potentially undervalued under current assumptions.", "success")
         if user_dcf.get("terminal_value_weight_pct") and user_dcf.get("terminal_value_weight_pct") > 0.65:
-            st.warning(
-                f"Terminal Value Warning: terminal value represents {fmt_percent(user_dcf.get('terminal_value_weight_pct'))} of enterprise value. The valuation is highly sensitive to terminal multiple and long-term margin assumptions."
+            _notice(
+                f"Terminal Value Warning: terminal value represents {fmt_percent(user_dcf.get('terminal_value_weight_pct'))} of enterprise value. The valuation is highly sensitive to terminal assumptions.",
+                "warning",
             )
         show_warnings(user_dcf.get("warnings", []))
         show_warnings(ctx.get("accounting_interpretation", {}).get("warnings", []))
         show_table(valuation_summary, "Valuation summary unavailable.")
 
+    st.markdown('<div class="pa-section-title">Step 4: Review Detailed Model</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(fcf_projection_chart(ctx["historicals"], user_dcf["forecast_table"]), width="stretch", key="v2_fcf_projection")
@@ -1149,19 +1345,62 @@ def _accounting_quality(ctx: dict) -> None:
         show_table(build_source_evidence_table(ctx["historicals"], ctx["dataset"]), "Source evidence unavailable.")
 
 
+def _ma_summary_rows(ctx: dict) -> pd.DataFrame:
+    dataset = ctx["dataset"]
+    sec_fin = dataset.get("financials", {}).get("sec", {})
+    profile = ctx.get("accounting_interpretation", {}).get("business_profile", {})
+    ma = ctx["ma"]
+    assets = sec_fin.get("assets", {}).get("value") if isinstance(sec_fin, dict) else None
+    goodwill = sec_fin.get("goodwill", {}).get("value") if isinstance(sec_fin, dict) else None
+    intangibles = sec_fin.get("intangibles", {}).get("value") if isinstance(sec_fin, dict) else None
+    goodwill_ratio = goodwill / assets if goodwill is not None and assets else None
+    intangibles_ratio = intangibles / assets if intangibles is not None and assets else None
+    integration_risk = "High" if ma.get("red_flags") else "Medium" if profile.get("acquisition_intensity") in {"Medium", "High"} else "Low"
+    return pd.DataFrame(
+        [
+            {"Metric": "Acquisition Intensity", "Value": profile.get("acquisition_intensity", UNAVAILABLE), "Read": "Business profile and M&A clauses"},
+            {"Metric": "Goodwill / Assets", "Value": goodwill_ratio, "Read": "SEC companyfacts when available"},
+            {"Metric": "Intangibles / Assets", "Value": intangibles_ratio, "Read": "SEC companyfacts when available"},
+            {"Metric": "Acquired Revenue Evidence", "Value": "Available" if not ma.get("timeline", pd.DataFrame()).empty else "Unavailable", "Read": "Extracted filing language"},
+            {"Metric": "Integration Risk", "Value": integration_risk, "Read": "Impairment, integration, goodwill, and acquisition language"},
+            {"Metric": "M&A Quality", "Value": ma.get("classification", "Unknown"), "Read": "Does M&A appear value-creating or revenue-padding?"},
+        ]
+    )
+
+
+def _ma_manual_review_table(ctx: dict) -> pd.DataFrame:
+    dataset = ctx["dataset"]
+    filings = dataset.get("latest_filings") or []
+    source_url = (filings[0].get("document_url") or filings[0].get("filing_url")) if filings else "https://www.sec.gov/edgar/search/"
+    return pd.DataFrame(
+        [
+            {
+                "Data Needed": "Acquisition timeline",
+                "Where to Review": "Business Combinations note; Goodwill and Intangibles note; MD&A; Investing cash flow; 8-K acquisition filings",
+                "Keywords": "acquisition, purchase price, goodwill, intangible, integration, impairment, business combination",
+                "Source URL": source_url,
+                "Model Impact": "Revenue growth, margins, amortization, debt/WACC, diluted shares, terminal multiple",
+            }
+        ]
+    )
+
+
 def _ma_management_sbc(ctx: dict) -> None:
     st.caption("M&A / Management / SBC: capital allocation, governance, and dilution signals.")
     management = ctx["management"]
     alignment = ctx["alignment"]
     ma = ctx["ma"]
+    ma_summary = _ma_summary_rows(ctx)
     metric_row(
         [
             ("Management", management.get("management_score"), "score"),
             ("Alignment", alignment.get("alignment_score"), "score"),
-            ("M&A Quality", ma.get("score"), "score"),
+            ("M&A Quality", ma.get("classification"), "text"),
             ("SBC Signal", alignment.get("sbc_risk", "Manual review required"), "text"),
         ]
     )
+    st.subheader("M&A Summary")
+    show_table(ma_summary, "M&A summary unavailable.")
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Management")
@@ -1174,8 +1413,27 @@ def _ma_management_sbc(ctx: dict) -> None:
     with c2:
         st.subheader("M&A")
         st.write(ma.get("summary") or "M&A read unavailable.")
+        for flag in ma.get("red_flags", [])[:3]:
+            _notice(flag, "risk")
         st.plotly_chart(ma_timeline_chart(ma), width="stretch", key="v2_ma_management")
-        show_table(ma.get("timeline"), "No M&A timeline available.")
+        timeline = ma.get("timeline")
+        if timeline is None or timeline.empty:
+            _notice("M&A timeline unavailable from extracted filings. Use the manual review guide below.", "warning")
+            show_table(_ma_manual_review_table(ctx), "No M&A manual review guide available.")
+        else:
+            show_table(timeline, "No M&A timeline available.")
+        with st.expander("M&A Model Implications"):
+            show_table(
+                pd.DataFrame(
+                    [
+                        {"Model Line": "Revenue growth", "Question": "Is growth bought or organic?", "Action": "Separate acquired revenue from organic growth."},
+                        {"Model Line": "NOPAT margin", "Question": "Are integration/amortization costs recurring?", "Action": "Review normalized operating margin."},
+                        {"Model Line": "D&A / amortization", "Question": "Are acquired intangibles depressing EBIT?", "Action": "Use accounting interpretation before changing assumptions."},
+                        {"Model Line": "Debt / WACC", "Question": "Was the deal cash/debt funded?", "Action": "Review financing and risk premium."},
+                        {"Model Line": "Diluted shares", "Question": "Was the deal stock-funded?", "Action": "Review dilution and per-share value."},
+                    ]
+                )
+            )
 
 
 def _moat_risks(ctx: dict) -> None:
@@ -1194,10 +1452,67 @@ def _moat_risks(ctx: dict) -> None:
     with c1:
         st.plotly_chart(moat_score_bar(moat.get("moat_sources")), width="stretch", key="v2_moat_risks_bar")
         st.write(moat.get("terminal_value_implication") or "Moat implication unavailable.")
+        st.subheader("Moat Scorecard")
+        scorecard = moat.get("moat_sources")
+        if scorecard is not None and not scorecard.empty:
+            show_table(
+                scorecard.rename(
+                    columns={
+                        "moat_source": "Moat Source",
+                        "score_1_to_10": "Score",
+                        "evidence": "Evidence",
+                        "confidence": "Confidence",
+                        "model_implication": "Model Impact",
+                    }
+                )[["Moat Source", "Score", "Evidence", "Confidence", "Model Impact"]],
+                "Moat scorecard unavailable.",
+            )
     with c2:
+        entrant = moat.get("new_entrant_test", {})
+        st.subheader("New Entrant Test")
+        show_table(
+            pd.DataFrame(
+                [
+                    {"Question": "How much capital would a new entrant need?", "Read": "Review capital intensity and scale evidence.", "Evidence": "; ".join(entrant.get("incumbent_advantages", [])[:2]) or "Manual review required"},
+                    {"Question": "Could a new entrant underprice?", "Read": "Review pricing power and peer margins.", "Evidence": "Peer and margin context required."},
+                    {"Question": "Could customers switch easily?", "Read": "Review switching cost / integration evidence.", "Evidence": "; ".join(entrant.get("entrant_risks", [])[:2]) or "Manual review required"},
+                    {"Question": "Does incumbent have distribution, data, compliance, or integration advantage?", "Read": "Review moat source scorecard.", "Evidence": moat.get("peer_context", UNAVAILABLE)},
+                    {"Question": "Would a new entrant reach breakeven quickly?", "Read": "Review unit economics, scale, and customer acquisition costs.", "Evidence": "Manual review required"},
+                ]
+            ),
+            "New entrant test unavailable.",
+        )
         _mini_list("Top risks", risks.get("top_risks", []) or ["No extracted risks available."])
-        _mini_list("Thesis breakers", risks.get("thesis_breakers", []) or ["No thesis breakers extracted."])
         st.write("Bear case:", risks.get("bear_case_implications") or UNAVAILABLE)
+
+    st.subheader("Thesis Breakers")
+    assumptions = ctx.get("base_assumptions", {})
+    show_table(
+        pd.DataFrame(
+            [
+                {"Thesis Breaker": "Revenue growth misses plan", "Metric to Watch": "Revenue growth", "Threshold": fmt_percent(assumptions.get("revenue_cagr", 0.08)), "Source": "SEC filings / earnings release", "Current Status": "Monitor", "Model Impact": "Revenue CAGR / scenario probability"},
+                {"Thesis Breaker": "OCF conversion weakens", "Metric to Watch": "OCF margin", "Threshold": fmt_percent(assumptions.get("ocf_margin", 0.15)), "Source": "Cash flow statement", "Current Status": "Monitor", "Model Impact": "OCF margin / FCF"},
+                {"Thesis Breaker": "SBC remains high", "Metric to Watch": "SBC % revenue", "Threshold": "10.0%", "Source": "Cash flow statement / compensation note", "Current Status": "Monitor", "Model Impact": "Dilution / per-share value"},
+                {"Thesis Breaker": "Terminal assumptions unsupported", "Metric to Watch": "Moat score / terminal value weight", "Threshold": "Terminal value > 65.0% EV", "Source": "DCF sensitivity", "Current Status": "Monitor", "Model Impact": "Terminal multiple / WACC"},
+            ]
+        ),
+        "Thesis breaker table unavailable.",
+    )
+    st.subheader("Risk Factor Translation")
+    risk_rows = []
+    for risk in (risks.get("top_risks", []) or [])[:5]:
+        risk_text = str(risk)
+        lower = risk_text.lower()
+        model_line = "revenue_growth" if "customer" in lower or "demand" in lower else "wacc" if "risk" in lower or "litigation" in lower else "terminal_multiple"
+        risk_rows.append(
+            {
+                "Legal / Filing Language": risk_text[:180],
+                "Business Risk": "Revenue volatility" if model_line == "revenue_growth" else "Higher risk premium" if model_line == "wacc" else "Weaker durability",
+                "Model Line Affected": model_line,
+                "Scenario Impact": "Increase bear-case probability / manual review",
+            }
+        )
+    show_table(pd.DataFrame(risk_rows), "Risk factor translation unavailable.")
 
 
 def _final_decision(ctx: dict) -> None:
@@ -1304,7 +1619,21 @@ def _peers_risks(ctx: dict) -> None:
 def _filter_options(df: pd.DataFrame, column: str) -> list[str]:
     if df is None or df.empty or column not in df:
         return []
-    return sorted(str(value) for value in df[column].dropna().unique())
+    label_map = {
+        "review_dcf": "Review DCF",
+        "flag_risk": "Flag Risk",
+        "manual_review": "Manual Review",
+        "update_scenario": "Update Scenario",
+        "Review DCF": "Review DCF",
+        "Flag risk": "Flag Risk",
+        "Manual review": "Manual Review",
+        "Update scenario": "Update Scenario",
+    }
+    values = df[column].dropna().astype(str).str.strip()
+    values = values[values.ne("")]
+    if column == "dashboard_action":
+        values = values.map(lambda value: label_map.get(value, value))
+    return sorted(set(values.tolist()))
 
 
 def _filtered_clauses(df: pd.DataFrame) -> pd.DataFrame:
@@ -1329,7 +1658,21 @@ def _filtered_clauses(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for column, values in selected.items():
         if values:
-            out = out[out[column].astype(str).isin(values)]
+            normalized = out[column].astype(str).str.strip()
+            if column == "dashboard_action":
+                normalized = normalized.map(
+                    lambda value: {
+                        "review_dcf": "Review DCF",
+                        "flag_risk": "Flag Risk",
+                        "manual_review": "Manual Review",
+                        "update_scenario": "Update Scenario",
+                        "Review DCF": "Review DCF",
+                        "Flag risk": "Flag Risk",
+                        "Manual review": "Manual Review",
+                        "Update scenario": "Update Scenario",
+                    }.get(value, value)
+                )
+            out = out[normalized.isin(values)]
     return out
 
 
@@ -1376,8 +1719,21 @@ def _clause_annotation_map(ctx: dict) -> None:
         "review_status",
     ]
     compact_cols = [column for column in ["topic", "model_line_affected", "direction", "confidence", "dashboard_action"] if column in filtered]
+    compact = filtered[compact_cols].copy()
+    if "dashboard_action" in compact:
+        compact["dashboard_action"] = compact["dashboard_action"].astype(str).str.strip().map(
+            lambda value: {
+                "review_dcf": "Review DCF",
+                "flag_risk": "Flag Risk",
+                "manual_review": "Manual Review",
+                "update_scenario": "Update Scenario",
+                "Flag risk": "Flag Risk",
+                "Manual review": "Manual Review",
+                "Update scenario": "Update Scenario",
+            }.get(value, value)
+        )
     show_table(
-        filtered[compact_cols].rename(
+        compact.rename(
             columns={
                 "topic": "Topic",
                 "model_line_affected": "Model Impact",
@@ -1511,7 +1867,8 @@ def render_dashboard():
     )
     _source_status(dataset)
     st.caption("Mode: SEC evidence loaded" if include_deep_sec else "Mode: fast SEC JSON snapshot")
-    show_warnings(dataset.get("warnings", []))
+    show_warnings(_critical_warnings(dataset.get("warnings", [])))
+    _data_coverage_expander(ctx)
     _summary_bar(ctx)
 
     tabs = [

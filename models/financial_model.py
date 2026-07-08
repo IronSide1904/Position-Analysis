@@ -287,7 +287,8 @@ def build_historical_financial_table(dataset: dict) -> pd.DataFrame:
     )
     debt_current = _sec_annual_series(sec_metrics, "debt_current", flow=False)
     debt_noncurrent = _sec_annual_series(sec_metrics, "debt_noncurrent", flow=False)
-    debt = debt_current.add(debt_noncurrent, fill_value=0)
+    sec_total_debt = _sec_annual_series(sec_metrics, "total_debt", flow=False)
+    debt = _coalesce_series(debt_current.add(debt_noncurrent, fill_value=0), sec_total_debt)
     yf_debt = _yf_annual_series(yf_financials, "balance_sheet", ["Total Debt", "Long Term Debt And Capital Lease Obligation", "Long Term Debt"])
     debt = _coalesce_series(debt, yf_debt)
 
