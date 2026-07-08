@@ -6,8 +6,10 @@ PA-11R Hybrid is a Streamlit dashboard for retail traders and investors. It keep
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+python scripts/launch_dashboard.py --port 8504
 ```
+
+The launcher normalizes duplicate Windows `Path` / `PATH` environment entries before starting Streamlit. This avoids the recurring PowerShell `Start-Process` failure: `Item has already been added. Key in dictionary: 'Path'`.
 
 ## Local Secrets
 
@@ -60,8 +62,7 @@ The dashboard still runs without Finviz. SEC and yfinance fallbacks keep the app
 Run:
 
 ```bash
-pytest
+pytest tests
 ```
 
 The tests focus on safe failure behavior and core model math. Network-backed SEC/yfinance behavior is intentionally isolated so the app can be validated offline.
-
