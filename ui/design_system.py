@@ -64,44 +64,61 @@ def apply_design_system() -> None:
         """
         <style>
         :root {
-            --pa-bg-dark: #0B1020;
-            --pa-card-dark: #111827;
-            --pa-card-border-dark: #334155;
-            --pa-text-dark: #F9FAFB;
-            --pa-muted-dark: #9CA3AF;
-            --pa-bg-light: #F8FAFC;
-            --pa-card-light: #FFFFFF;
-            --pa-card-border-light: #CBD5E1;
-            --pa-text-light: #0F172A;
-            --pa-muted-light: #475569;
+            --pa-bg-dark: #080D18;
+            --pa-panel-dark: #0F172A;
+            --pa-card-dark: #0B1220;
+            --pa-card-border-dark: rgba(148, 163, 184, 0.28);
+            --pa-text-dark: #F8FAFC;
+            --pa-muted-dark: #CBD5E1;
+            --pa-soft-dark: #94A3B8;
             --pa-green: #22C55E;
-            --pa-yellow: #EAB308;
+            --pa-yellow: #F59E0B;
             --pa-orange: #F97316;
-            --pa-red: #EF4444;
-            --pa-blue: #3B82F6;
+            --pa-red: #F87171;
+            --pa-blue: #38BDF8;
+            --pa-teal: #14B8A6;
+            --pa-cyan: #22D3EE;
             --pa-gray: #64748B;
         }
+        html, body, [data-testid="stAppViewContainer"], .stApp {
+            background: var(--pa-bg-dark) !important;
+            color: var(--pa-text-dark) !important;
+        }
+        [data-testid="stHeader"] {
+            background: rgba(8, 13, 24, 0.78) !important;
+        }
+        [data-testid="stSidebar"] {
+            background: #070B14 !important;
+            border-right: 1px solid rgba(148, 163, 184, 0.18) !important;
+        }
+        [data-testid="stSidebar"] * {
+            color: #E5E7EB !important;
+        }
         .block-container { max-width: 1520px; padding-top: 1rem; }
+        h1, h2, h3, h4, h5, h6, p, label, span {
+            color: inherit;
+        }
         .pa-cockpit-hero {
-            border: 1px solid rgba(148, 163, 184, 0.35);
-            border-radius: 18px;
-            padding: 18px 22px;
+            border: 1px solid rgba(148, 163, 184, 0.30);
+            border-radius: 8px;
+            padding: 18px 20px;
             margin-bottom: 16px;
             background:
-                radial-gradient(circle at top right, rgba(59, 130, 246, 0.22), transparent 32%),
-                linear-gradient(135deg, #0B1020 0%, #111827 58%, #172554 100%);
-            color: #F9FAFB;
+                radial-gradient(circle at top right, rgba(20, 184, 166, 0.16), transparent 34%),
+                linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(8, 13, 24, 0.98));
+            color: var(--pa-text-dark);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 14px 30px rgba(2, 6, 23, 0.18);
         }
         .pa-cockpit-kicker {
-            color: #93C5FD;
+            color: #99F6E4;
             font-size: 0.78rem;
             font-weight: 800;
-            letter-spacing: 0.08em;
+            letter-spacing: 0;
             text-transform: uppercase;
             margin-bottom: 5px;
         }
         .pa-cockpit-title {
-            color: #F9FAFB;
+            color: #F8FAFC;
             font-size: clamp(1.45rem, 2.3vw, 2.45rem);
             font-weight: 850;
             line-height: 1.08;
@@ -116,30 +133,72 @@ def apply_design_system() -> None:
         .pa-card-grid {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 14px;
+            gap: 12px;
             margin: 14px 0 18px 0;
         }
         .pa-card-grid.numeric {
             grid-template-columns: repeat(4, minmax(0, 1fr));
         }
         .pa-card {
-            border-radius: 16px;
-            padding: 18px 20px;
-            min-height: 140px;
+            position: relative;
+            border-radius: 8px;
+            padding: 18px 18px 16px;
+            min-height: 132px;
             height: auto;
-            overflow: visible;
+            overflow: hidden;
             border: 1px solid var(--pa-card-border-dark);
-            background: var(--pa-card-dark);
+            background:
+                linear-gradient(145deg, rgba(15, 23, 42, 0.94), rgba(8, 13, 24, 0.96)),
+                radial-gradient(circle at top right, rgba(34, 211, 238, 0.12), transparent 34%);
             color: var(--pa-text-dark);
-            box-shadow: 0 12px 30px rgba(2, 6, 23, 0.18);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 28px rgba(2, 6, 23, 0.18);
         }
+        .pa-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 3px;
+            background: var(--pa-gray);
+        }
+        .pa-card.pa-positive {
+            border-color: rgba(34, 197, 94, 0.38);
+            background:
+                linear-gradient(145deg, rgba(10, 30, 24, 0.94), rgba(8, 13, 24, 0.96)),
+                radial-gradient(circle at top right, rgba(34, 197, 94, 0.16), transparent 36%);
+        }
+        .pa-card.pa-caution,
+        .pa-card.pa-warning {
+            border-color: rgba(245, 158, 11, 0.38);
+            background:
+                linear-gradient(145deg, rgba(35, 26, 9, 0.94), rgba(8, 13, 24, 0.96)),
+                radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 36%);
+        }
+        .pa-card.pa-negative {
+            border-color: rgba(248, 113, 113, 0.40);
+            background:
+                linear-gradient(145deg, rgba(34, 15, 20, 0.94), rgba(8, 13, 24, 0.96)),
+                radial-gradient(circle at top right, rgba(248, 113, 113, 0.16), transparent 36%);
+        }
+        .pa-card.pa-info {
+            border-color: rgba(56, 189, 248, 0.38);
+            background:
+                linear-gradient(145deg, rgba(8, 25, 38, 0.94), rgba(8, 13, 24, 0.96)),
+                radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 36%);
+        }
+        .pa-card.pa-positive::before { background: linear-gradient(90deg, var(--pa-green), rgba(34, 197, 94, 0.25)); }
+        .pa-card.pa-caution::before,
+        .pa-card.pa-warning::before { background: linear-gradient(90deg, var(--pa-yellow), rgba(245, 158, 11, 0.25)); }
+        .pa-card.pa-negative::before { background: linear-gradient(90deg, var(--pa-red), rgba(248, 113, 113, 0.25)); }
+        .pa-card.pa-info::before { background: linear-gradient(90deg, var(--pa-blue), rgba(56, 189, 248, 0.25)); }
         .pa-card-title {
-            font-size: 0.92rem;
+            color: #CBD5E1 !important;
+            font-size: 0.9rem;
             font-weight: 800;
-            opacity: 0.9;
+            opacity: 1;
             margin-bottom: 10px;
         }
         .pa-card-value {
+            color: #FFFFFF !important;
             font-size: clamp(1.55rem, 2.6vw, 2.7rem);
             font-weight: 850;
             line-height: 1.08;
@@ -149,10 +208,11 @@ def apply_design_system() -> None:
             overflow-wrap: anywhere;
         }
         .pa-card-subtitle {
+            color: #AEBCCB !important;
             margin-top: 10px;
             font-size: 0.86rem;
             line-height: 1.35;
-            opacity: 0.82;
+            opacity: 1;
             white-space: normal !important;
         }
         .pa-card-meta {
@@ -168,83 +228,211 @@ def apply_design_system() -> None:
             font-size: 0.75rem;
             font-weight: 800;
             margin-top: 8px;
-            border: 1px solid rgba(255,255,255,0.16);
-            background: rgba(255,255,255,0.08);
+            color: #E5E7EB !important;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(15, 23, 42, 0.72);
         }
-        .pa-positive { border-left: 5px solid var(--pa-green); }
-        .pa-caution { border-left: 5px solid var(--pa-yellow); }
-        .pa-warning { border-left: 5px solid var(--pa-orange); }
-        .pa-negative { border-left: 5px solid var(--pa-red); }
-        .pa-info { border-left: 5px solid var(--pa-blue); }
-        .pa-neutral { border-left: 5px solid var(--pa-gray); }
         .pa-card *, .pa-card div, .pa-card span, .pa-card p {
             white-space: normal !important;
             overflow: visible !important;
             text-overflow: clip !important;
         }
         .pa-section-shell {
-            border: 1px solid #CBD5E1;
-            border-radius: 16px;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 8px;
             padding: 16px 18px;
-            background: #FFFFFF;
-            color: #0F172A;
+            background:
+                linear-gradient(145deg, rgba(15, 23, 42, 0.92), rgba(8, 13, 24, 0.95)),
+                radial-gradient(circle at top right, rgba(14, 116, 144, 0.16), transparent 34%);
+            color: #F8FAFC;
             margin: 12px 0 16px 0;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 28px rgba(2, 6, 23, 0.16);
         }
         .pa-section-kicker {
-            color: #2563EB;
+            color: #99F6E4;
             font-size: 0.76rem;
             font-weight: 850;
-            letter-spacing: 0.07em;
+            letter-spacing: 0;
             text-transform: uppercase;
             margin-bottom: 5px;
         }
         .pa-section-heading {
-            color: #0F172A;
+            color: #F8FAFC;
             font-size: 1.25rem;
             font-weight: 850;
             margin-bottom: 4px;
         }
         .pa-section-copy {
-            color: #475569;
+            color: #CBD5E1;
             font-size: 0.92rem;
             line-height: 1.45;
         }
         .pa-summary-panel {
-            border-radius: 16px;
-            border: 1px solid #CBD5E1;
-            background: #F8FAFC;
+            border-radius: 8px;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background:
+                linear-gradient(145deg, rgba(15, 23, 42, 0.92), rgba(8, 13, 24, 0.95)),
+                radial-gradient(circle at top right, rgba(20, 184, 166, 0.12), transparent 34%);
             padding: 16px 18px;
             margin: 14px 0;
-            color: #0F172A;
+            color: #CBD5E1;
         }
         .pa-summary-panel h4 {
+            color: #F8FAFC;
             margin: 0 0 10px 0;
             font-size: 1rem;
         }
         .pa-summary-panel li { margin-bottom: 6px; }
+        div[data-testid="stTabs"] div[role="tablist"],
+        div[data-testid="stTabs"] div[data-baseweb="tab-list"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 0.75rem !important;
+            padding: 0.25rem 0 0.55rem !important;
+            margin: 0.65rem 0 1.15rem !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            overflow-x: visible !important;
+        }
+        div[data-testid="stTabs"] div[data-baseweb="tab-border"],
+        div[data-testid="stTabs"] div[data-baseweb="tab-highlight"] {
+            display: none !important;
+        }
+        div[data-testid="stTabs"] button[role="tab"],
+        div[data-testid="stTabs"] button[data-baseweb="tab"] {
+            position: relative !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            flex: 0 0 auto !important;
+            min-height: 3rem !important;
+            width: auto !important;
+            color: #B6C2D1 !important;
+            background:
+                linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(8, 13, 24, 0.98)) !important;
+            border: 1px solid rgba(148, 163, 184, 0.42) !important;
+            border-radius: 12px !important;
+            padding: 0.66rem 1.08rem !important;
+            margin: 0 !important;
+            isolation: isolate;
+            overflow: hidden;
+            box-shadow:
+                0 10px 24px rgba(2, 6, 23, 0.30),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+            transition: background 170ms ease, border-color 170ms ease, box-shadow 170ms ease, transform 170ms ease, color 170ms ease;
+        }
+        div[data-testid="stTabs"] button[role="tab"]::before,
+        div[data-testid="stTabs"] button[data-baseweb="tab"]::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: -1;
+            background:
+                radial-gradient(circle at top left, rgba(103, 232, 249, 0.28), transparent 42%),
+                linear-gradient(135deg, rgba(34, 211, 238, 0.18), rgba(20, 184, 166, 0.05));
+            opacity: 0;
+            transition: opacity 170ms ease;
+        }
+        div[data-testid="stTabs"] button[role="tab"]:hover,
+        div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+            color: #F8FAFC !important;
+            border-color: rgba(103, 232, 249, 0.48) !important;
+            box-shadow: 0 12px 26px rgba(8, 47, 73, 0.30) !important;
+            transform: translateY(-1px);
+        }
+        div[data-testid="stTabs"] button[role="tab"]:hover::before,
+        div[data-testid="stTabs"] button[data-baseweb="tab"]:hover::before {
+            opacity: 1;
+        }
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"],
+        div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #0891B2, #0F766E) !important;
+            border-color: rgba(165, 243, 252, 0.72) !important;
+            box-shadow:
+                0 16px 32px rgba(8, 145, 178, 0.34),
+                inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+            transform: translateY(-1px);
+        }
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"]::after,
+        div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"]::after {
+            content: "";
+            position: absolute;
+            left: 18%;
+            right: 18%;
+            bottom: 0.32rem;
+            height: 3px;
+            border-radius: 999px;
+            background: rgba(240, 253, 250, 0.9);
+            box-shadow: 0 0 14px rgba(240, 253, 250, 0.62);
+        }
         div[data-testid="stTabs"] button p {
+            color: inherit !important;
             font-size: 0.95rem;
-            font-weight: 800;
+            font-weight: 800 !important;
             white-space: normal !important;
         }
-        div[data-testid="stDataFrame"] {
-            border: 1px solid #334155;
-            border-radius: 10px;
-            overflow: hidden;
+        [data-testid="stRadio"] div[role="radiogroup"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 0.75rem !important;
         }
-        @media (prefers-color-scheme: light) {
-            .pa-card {
-                background: var(--pa-card-light);
-                color: var(--pa-text-light);
-                border-color: var(--pa-card-border-light);
-                box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-            }
-            .pa-card-subtitle { color: var(--pa-muted-light); opacity: 1; }
-            .pa-badge {
-                color: #0F172A;
-                background: #F1F5F9;
-                border-color: #CBD5E1;
-            }
+        [data-testid="stRadio"] div[role="radiogroup"] label {
+            position: relative !important;
+            min-height: 3.05rem !important;
+            color: #B6C2D1 !important;
+            background: linear-gradient(180deg, rgba(30, 41, 59, 0.96), rgba(8, 13, 24, 0.98)) !important;
+            border: 1px solid rgba(148, 163, 184, 0.42) !important;
+            border-radius: 12px !important;
+            padding: 0.68rem 1.12rem !important;
+            box-shadow: 0 10px 24px rgba(2, 6, 23, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+        }
+        [data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
+            color: #FFFFFF !important;
+            background: linear-gradient(135deg, #0891B2, #0F766E) !important;
+            border-color: rgba(165, 243, 252, 0.78) !important;
+        }
+        [data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
+            display: none !important;
+        }
+        [data-testid="stRadio"] div[role="radiogroup"] label p,
+        [data-testid="stRadio"] div[role="radiogroup"] label span {
+            color: inherit !important;
+            font-weight: 850 !important;
+        }
+        div[data-testid="stMetric"] {
+            border: 1px solid rgba(148, 163, 184, 0.24) !important;
+            border-radius: 8px !important;
+            padding: 0.75rem !important;
+            background: rgba(15, 23, 42, 0.58) !important;
+            color: #F8FAFC !important;
+        }
+        div[data-testid="stMetric"] * { color: #F8FAFC !important; }
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetricLabel"],
+        div[data-testid="stMetricDelta"] { color: #CBD5E1 !important; }
+        div[data-testid="stDataFrame"] {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 8px;
+            overflow: hidden;
+            background: rgba(15, 23, 42, 0.42);
+            box-shadow: 0 10px 26px rgba(2, 6, 23, 0.16);
+        }
+        div[data-testid="stDataFrame"] div[role="columnheader"] {
+            color: #F8FAFC !important;
+            background: rgba(15, 23, 42, 0.92) !important;
+            font-weight: 800 !important;
+        }
+        div[data-testid="stAlert"] {
+            color: #E5E7EB !important;
+            border: 1px solid rgba(148, 163, 184, 0.24) !important;
+            border-radius: 8px !important;
+            background: rgba(15, 23, 42, 0.88) !important;
+        }
+        div[data-testid="stAlert"] * {
+            color: #E5E7EB !important;
         }
         @media (max-width: 1050px) {
             .pa-card-grid, .pa-card-grid.numeric { grid-template-columns: repeat(2, minmax(0, 1fr)); }

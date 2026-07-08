@@ -115,31 +115,33 @@ def _css() -> None:
             font-weight: 700;
         }
         .pa-tab-note {
-            border: 1px solid #d8e1ea;
+            border: 1px solid rgba(148, 163, 184, 0.24);
             border-radius: 8px;
             padding: 0.45rem 0.65rem;
             margin: 0.25rem 0 0.45rem 0;
-            background: #f8fafc;
-            color: #334155;
+            background: rgba(15, 23, 42, 0.72);
+            color: #cbd5e1;
             font-size: 0.85rem;
             font-weight: 700;
         }
         .pa-pill {
             display: inline-block;
-            border: 1px solid #c8d3df;
+            border: 1px solid rgba(148, 163, 184, 0.24);
             border-radius: 999px;
             padding: 0.16rem 0.55rem;
             margin: 0 0.25rem 0.25rem 0;
             font-size: 0.78rem;
-            background: #f7f9fb;
+            background: rgba(15, 23, 42, 0.58);
+            color: #cbd5e1;
         }
-        .pa-pill-ok { border-color: #98d4b4; background: #edf9f2; color: #166534; }
-        .pa-pill-warn { border-color: #f0ca79; background: #fff8e7; color: #854d0e; }
+        .pa-pill-ok { border-color: rgba(34, 197, 94, 0.38); background: rgba(34, 197, 94, 0.12); color: #bbf7d0; }
+        .pa-pill-warn { border-color: rgba(245, 158, 11, 0.38); background: rgba(245, 158, 11, 0.12); color: #fde68a; }
         .pa-band {
-            border: 1px solid #d9e0e8;
+            border: 1px solid rgba(148, 163, 184, 0.24);
             border-radius: 8px;
             padding: 0.8rem 0.9rem;
-            background: #fbfcfe;
+            background: rgba(15, 23, 42, 0.55);
+            color: #e5e7eb;
             margin-bottom: 0.8rem;
         }
         .pa-section-title {
@@ -162,11 +164,11 @@ def _css() -> None:
             display: grid;
             grid-template-columns: repeat(8, minmax(110px, 1fr));
             gap: 0.45rem;
-            border: 1px solid #d8e1ea;
+            border: 1px solid rgba(148, 163, 184, 0.24);
             border-radius: 8px;
             padding: 0.55rem;
             margin: 0.75rem 0 0.85rem 0;
-            background: #f8fafc;
+            background: rgba(15, 23, 42, 0.55);
         }
         .pa-summary-item {
             border-left: 3px solid #9db4d4;
@@ -182,7 +184,7 @@ def _css() -> None:
             text-overflow: ellipsis;
         }
         .pa-summary-value {
-            color: #0f172a;
+            color: #f8fafc;
             font-size: 0.95rem;
             font-weight: 700;
             white-space: nowrap;
@@ -190,64 +192,55 @@ def _css() -> None:
             text-overflow: ellipsis;
         }
         .pa-box {
-            border: 1px solid #d9e0e8;
+            border: 1px solid rgba(148, 163, 184, 0.24);
             border-radius: 8px;
             padding: 0.75rem 0.85rem;
-            background: #fbfcfe;
-            color: #111827;
+            background: rgba(15, 23, 42, 0.58);
+            color: #e5e7eb;
             margin-bottom: 0.75rem;
         }
-        .pa-box * { color: #111827 !important; }
+        .pa-box * { color: #e5e7eb !important; }
         .pa-box-title {
-            color: #334155;
+            color: #99f6e4;
             font-size: 0.86rem;
             font-weight: 700;
             margin-bottom: 0.25rem;
         }
-        .pa-card {
-            background-color: #111827;
-            border: 1px solid #374151;
-            border-radius: 10px;
-            padding: 16px;
-            color: #F9FAFB;
-            margin-bottom: 0.75rem;
-        }
-        .pa-card * { color: #F9FAFB !important; }
         .pa-card-light {
-            background-color: #F9FAFB;
-            border: 1px solid #D1D5DB;
-            border-radius: 10px;
+            background-color: rgba(15, 23, 42, 0.58);
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 8px;
             padding: 16px;
-            color: #111827;
+            color: #e5e7eb;
             margin-bottom: 0.75rem;
         }
-        .pa-card-light * { color: #111827 !important; }
+        .pa-card-light * { color: #e5e7eb !important; }
         .pa-muted { color: #9CA3AF !important; }
-        .pa-warning {
-            background-color: #FEF3C7;
-            color: #111827 !important;
+        .pa-notice-warning {
+            background-color: rgba(245, 158, 11, 0.12);
+            color: #fde68a !important;
             border-left: 4px solid #F59E0B;
             padding: 12px;
             border-radius: 8px;
             margin-bottom: 8px;
         }
-        .pa-risk {
-            background-color: #FEE2E2;
-            color: #111827 !important;
+        .pa-notice-risk {
+            background-color: rgba(248, 113, 113, 0.12);
+            color: #fecaca !important;
             border-left: 4px solid #EF4444;
             padding: 12px;
             border-radius: 8px;
             margin-bottom: 8px;
         }
-        .pa-success {
-            background-color: #DCFCE7;
-            color: #111827 !important;
+        .pa-notice-success {
+            background-color: rgba(34, 197, 94, 0.12);
+            color: #bbf7d0 !important;
             border-left: 4px solid #22C55E;
             padding: 12px;
             border-radius: 8px;
             margin-bottom: 8px;
         }
-        .pa-warning *, .pa-risk *, .pa-success * { color: #111827 !important; }
+        .pa-notice-warning *, .pa-notice-risk *, .pa-notice-success * { color: inherit !important; }
         @media (max-width: 1100px) {
             .pa-summary-bar { grid-template-columns: repeat(4, minmax(110px, 1fr)); }
         }
@@ -374,7 +367,11 @@ def _summary_bar(ctx: dict) -> None:
 
 
 def _notice(message: str, kind: str = "warning") -> None:
-    cls = {"warning": "pa-warning", "risk": "pa-risk", "success": "pa-success"}.get(kind, "pa-warning")
+    cls = {
+        "warning": "pa-notice-warning",
+        "risk": "pa-notice-risk",
+        "success": "pa-notice-success",
+    }.get(kind, "pa-notice-warning")
     st.markdown(f'<div class="{cls}">{message}</div>', unsafe_allow_html=True)
 
 
