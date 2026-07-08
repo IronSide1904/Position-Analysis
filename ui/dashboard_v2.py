@@ -1074,72 +1074,854 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def _assumption_editor(base: dict) -> dict:
-    def pct_slider(label: str, minimum: float, maximum: float, value: float, step: float = 0.5) -> float:
-        try:
-            pct_value = float(value) * 100
-        except (TypeError, ValueError):
-            pct_value = 0.0
-        pct_value = min(max(pct_value, minimum * 100), maximum * 100)
-        return st.slider(label, minimum * 100, maximum * 100, pct_value, step, format="%.1f%%") / 100
+ASSUMPTION_GROUPS = {
+    "Growth": "These assumptions determine the size of the forecast revenue base.",
+    "Margins & OPEX": "These assumptions determine how much revenue converts into operating profit and NOPAT.",
+    "Cash Conversion": "These assumptions determine whether accounting profit converts into operating cash flow.",
+    "Reinvestment": "These assumptions determine how much cash must be reinvested before owners get FCF.",
+    "Terminal Value": "These assumptions drive the discount rate and the value after the explicit forecast period.",
+    "Dilution": "These assumptions determine how enterprise value converts into per-share value.",
+}
 
-    st.markdown('<div class="pa-section-title">Step 1: Valuation Mode</div>', unsafe_allow_html=True)
-    dcf_mode = st.segmented_control("Valuation mode", ["FCFF", "FCF", "NOPAT"], default=str(base.get("dcf_mode", "FCFF")).upper())
-    st.caption("Changing assumptions recalculates fair value immediately. Filing-derived assumption changes are not applied automatically unless you confirm them.")
-    st.markdown('<div class="pa-section-title">Step 2: Adjust Assumptions</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Growth**")
-        forecast_years = st.slider("Forecast years", 5, 10, int(base.get("forecast_years", 5)), 1)
-        revenue_cagr = pct_slider("Revenue CAGR", -0.20, 0.60, base.get("revenue_cagr", 0.08))
-        st.markdown("**Margins**")
-        gross_margin = pct_slider("Gross margin", -0.20, 0.80, base.get("gross_margin", 0.45))
-        ebit_margin = pct_slider("EBIT margin", -0.20, 0.60, base.get("operating_margin", 0.15))
-        ocf_margin = pct_slider("OCF margin", -0.20, 0.60, base.get("ocf_margin", 0.16))
-        tax_rate = pct_slider("Tax rate", 0.00, 0.40, base.get("tax_rate", 0.21))
-        with st.expander("Operating cost detail"):
-            sm_pct = pct_slider("S&M / revenue", 0.00, 0.50, base.get("sm_pct_revenue", 0.0))
-            rd_pct = pct_slider("R&D / revenue", 0.00, 0.50, base.get("rd_pct_revenue", 0.0))
-            ga_pct = pct_slider("G&A / revenue", 0.00, 0.50, base.get("ga_pct_revenue", 0.0))
-    with c2:
-        st.markdown("**Reinvestment**")
-        maint_capex = pct_slider("Maintenance CAPEX / revenue", 0.00, 0.25, base.get("maintenance_capex_pct_revenue", 0.03))
-        growth_capex = pct_slider("Growth CAPEX / revenue", 0.00, 0.35, base.get("growth_capex_pct_revenue", 0.02))
-        working_capital = pct_slider("Working capital / revenue", -0.10, 0.20, base.get("working_capital_pct_revenue", 0.01))
-        st.markdown("**Dilution**")
-        sbc_pct = pct_slider("SBC / revenue", 0.00, 0.30, base.get("sbc_pct_revenue", 0.0))
-        share_growth = pct_slider("Diluted share growth", -0.10, 0.20, base.get("diluted_share_growth", 0.0))
-        shares = st.number_input("Diluted shares", value=float(base.get("diluted_shares") or 0), min_value=0.0, step=1_000_000.0, format="%.0f")
-        st.markdown("**Discount / Terminal**")
-        wacc = pct_slider("WACC", 0.04, 0.20, base.get("wacc", 0.095))
-        terminal_growth = pct_slider("Terminal growth", -0.02, 0.06, base.get("terminal_growth", 0.025))
-        terminal_multiple = st.slider("Terminal multiple", 4.0, 35.0, float(base.get("terminal_multiple", 15.0)), 0.5, format="%.1f")
-        margin_of_safety = pct_slider("Margin of safety", 0.0, 0.6, base.get("margin_of_safety", 0.30), step=5.0)
-    nopat_margin = ebit_margin * (1 - tax_rate)
+
+ASSUMPTION_METADATA = {
+    "forecast_years": {
+        "label": "Forecast Years",
+        "unit": "years",
+        "group": "Growth",
+        "description": "Number of explicit years forecast before terminal value is calculated.",
+        "model_line": "Forecast Period",
+        "affects": ["Revenue", "FCF", "Terminal Value", "Fair Value"],
+        "default_source": "Model framework default.",
+        "reasonable_range": "Usually 5-10 years. Longer periods need unusually durable visibility.",
+        "warning": "Long forecast periods can hide aggressive terminal assumptions.",
+        "min": 5,
+        "max": 10,
+        "step": 1,
+        "source": "Scenario-based",
+    },
+    "revenue_cagr": {
+        "label": "Revenue CAGR",
+        "unit": "percent",
+        "group": "Growth",
+        "description": "Annualized revenue growth during the explicit forecast period.",
+        "model_line": "Revenue",
+        "affects": ["Revenue", "Gross Profit", "OPEX", "OCF", "NOPAT", "FCF", "Terminal Value"],
+        "default_source": "Historical growth, guidance, backlog, and analyst scenario.",
+        "reasonable_range": "Low-growth mature firms: 0%-5%; quality growth: 5%-15%; high-growth/small-cap: 15%+ only with evidence.",
+        "warning": "Do not raise revenue growth without evidence such as backlog, pricing, volume, customer growth, capacity, or market expansion.",
+        "min": -0.20,
+        "max": 0.60,
+        "step": 0.005,
+        "source": "Scenario-based",
+    },
+    "gross_margin": {
+        "label": "Gross Margin",
+        "unit": "percent",
+        "group": "Margins & OPEX",
+        "description": "Gross profit as a percentage of revenue.",
+        "model_line": "Gross Profit",
+        "affects": ["Gross Profit", "EBIT", "NOPAT", "FCF"],
+        "default_source": "Historical gross margin and peer margin comparison.",
+        "reasonable_range": "Anchor to history, segment mix, pricing, input costs, and peers.",
+        "warning": "Margin expansion requires evidence from mix shift, pricing, automation, cost control, or scale.",
+        "min": -0.20,
+        "max": 0.90,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "opex_pct_revenue": {
+        "label": "OPEX % Revenue",
+        "unit": "percent",
+        "group": "Margins & OPEX",
+        "description": "Operating expenses as a percentage of revenue. Lower OPEX % usually means better operating leverage.",
+        "model_line": "OPEX",
+        "affects": ["EBIT", "NOPAT", "FCF", "Operating Leverage"],
+        "default_source": "Reported OPEX lines or calculated as Gross Profit minus EBIT.",
+        "reasonable_range": "Compare with history and peer OPEX ratios.",
+        "warning": "Do not lower OPEX % unless evidence supports sales efficiency, G&A leverage, lower R&D intensity, restructuring, or scale benefits.",
+        "min": 0.0,
+        "max": 0.90,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "tax_rate": {
+        "label": "Tax Rate",
+        "unit": "percent",
+        "group": "Margins & OPEX",
+        "description": "Cash tax rate applied to operating profit in the NOPAT bridge.",
+        "model_line": "NOPAT",
+        "affects": ["NOPAT", "FCF", "Fair Value"],
+        "default_source": "Model default and reported effective tax rate context.",
+        "reasonable_range": "Usually 15%-30% unless loss carryforwards, geography, or credits justify a different rate.",
+        "warning": "Low tax rates should be tied to tax assets or jurisdiction mix.",
+        "min": 0.0,
+        "max": 0.40,
+        "step": 0.005,
+        "source": "Estimated",
+    },
+    "nopat_margin": {
+        "label": "Direct NOPAT Margin",
+        "unit": "percent",
+        "group": "Margins & OPEX",
+        "description": "Direct override for normalized after-tax operating profit as a percentage of revenue.",
+        "model_line": "NOPAT",
+        "affects": ["NOPAT", "FCF", "Fair Value"],
+        "default_source": "EBIT margin after tax unless direct override is active.",
+        "reasonable_range": "Should reconcile to gross margin, OPEX intensity, tax rate, and peers.",
+        "warning": "Direct NOPAT overrides can obscure whether the change came from gross margin, OPEX, or tax rate.",
+        "min": -0.20,
+        "max": 0.60,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "ocf_margin": {
+        "label": "OCF Margin",
+        "unit": "percent",
+        "group": "Cash Conversion",
+        "description": "Operating cash flow as a percentage of revenue. This captures cash conversion quality.",
+        "model_line": "OCF",
+        "affects": ["OCF", "FCF", "DCF Fair Value"],
+        "default_source": "Reported OCF divided by revenue, adjusted for working-capital distortions if available.",
+        "reasonable_range": "Check against historical OCF margin, working capital behavior, and peers.",
+        "warning": "OCF can be temporarily distorted by receivables, inventory, payables, deferred revenue, or one-time cash items.",
+        "min": -0.20,
+        "max": 0.60,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "working_capital_pct_revenue": {
+        "label": "Working Capital % Revenue",
+        "unit": "percent",
+        "group": "Cash Conversion",
+        "description": "Cash tied up or released through receivables, inventory, payables, deferred revenue, and contract assets.",
+        "model_line": "Working Capital",
+        "affects": ["OCF", "FCF"],
+        "default_source": "Historical working capital changes and business model needs.",
+        "reasonable_range": "Negative working capital can support OCF; inventory-heavy growth can reduce OCF.",
+        "warning": "Backlog growth may require inventory or receivables investment before cash is collected.",
+        "min": -0.10,
+        "max": 0.20,
+        "step": 0.005,
+        "source": "Estimated",
+    },
+    "maintenance_capex_pct_revenue": {
+        "label": "Maintenance CAPEX % Revenue",
+        "unit": "percent",
+        "group": "Reinvestment",
+        "description": "CAPEX required to maintain current operations.",
+        "model_line": "Maintenance CAPEX",
+        "affects": ["FCF", "Normalized Cash Earnings"],
+        "default_source": "Company disclosure or D&A proxy if undisclosed.",
+        "reasonable_range": "Asset-light software may be low; manufacturing/industrial businesses may be much higher.",
+        "warning": "If undisclosed, a D&A proxy may be wrong. Review asset intensity, industry, and CAPEX notes.",
+        "min": 0.0,
+        "max": 0.25,
+        "step": 0.005,
+        "source": "Estimated",
+    },
+    "growth_capex_pct_revenue": {
+        "label": "Growth CAPEX % Revenue",
+        "unit": "percent",
+        "group": "Reinvestment",
+        "description": "Reinvestment intended to create future capacity, revenue, or efficiency.",
+        "model_line": "Growth CAPEX",
+        "affects": ["FCF", "Future Revenue", "Margins"],
+        "default_source": "CAPEX notes, capacity expansion, backlog, new facilities, or technology investment.",
+        "reasonable_range": "Can be temporarily elevated during expansion cycles.",
+        "warning": "Growth CAPEX may reduce near-term FCF but improve future revenue or margins if execution succeeds.",
+        "min": 0.0,
+        "max": 0.35,
+        "step": 0.005,
+        "source": "Estimated",
+    },
+    "wacc": {
+        "label": "WACC",
+        "unit": "percent",
+        "group": "Terminal Value",
+        "description": "Discount rate used to convert future cash flows into present value.",
+        "model_line": "Discount Rate",
+        "affects": ["Enterprise Value", "Fair Value Per Share"],
+        "default_source": "Risk-free rate + equity risk premium + company-specific risk.",
+        "reasonable_range": "Usually 8%-12%; higher for small caps, cyclicals, leverage, weak visibility, or governance risk.",
+        "warning": "A small WACC change can have a large valuation impact.",
+        "min": 0.04,
+        "max": 0.20,
+        "step": 0.005,
+        "source": "Estimated",
+    },
+    "terminal_growth": {
+        "label": "Terminal Growth",
+        "unit": "percent",
+        "group": "Terminal Value",
+        "description": "Long-term growth rate after the explicit forecast period.",
+        "model_line": "Terminal Value",
+        "affects": ["Terminal Value", "Fair Value Per Share"],
+        "default_source": "Long-run industry growth, moat, inflation, and maturity profile.",
+        "reasonable_range": "Usually 0%-3%. Higher requires strong moat and durable growth evidence.",
+        "warning": "Aggressive terminal growth can overstate valuation.",
+        "min": -0.02,
+        "max": 0.06,
+        "step": 0.005,
+        "source": "Scenario-based",
+    },
+    "terminal_multiple": {
+        "label": "Terminal Multiple",
+        "unit": "multiple",
+        "group": "Terminal Value",
+        "description": "Exit multiple applied to final-year cash flow.",
+        "model_line": "Terminal Value",
+        "affects": ["Terminal Value", "Fair Value Per Share"],
+        "default_source": "Peer multiples, moat, growth durability, profitability, and capital intensity.",
+        "reasonable_range": "Weak/no-growth: <=10x; low-growth: ~12x; stronger quality/growth: ~15x; higher only with evidence.",
+        "warning": "If terminal value is a large share of EV, this assumption is critical.",
+        "min": 4.0,
+        "max": 35.0,
+        "step": 0.5,
+        "source": "Scenario-based",
+    },
+    "sbc_pct_revenue": {
+        "label": "SBC % Revenue",
+        "unit": "percent",
+        "group": "Dilution",
+        "description": "Stock-based compensation as a percentage of revenue.",
+        "model_line": "SBC",
+        "affects": ["Dilution", "Owner Earnings Quality"],
+        "default_source": "Reported SBC divided by revenue.",
+        "reasonable_range": "High-growth software may be higher; mature firms should trend lower.",
+        "warning": "High SBC can transfer value from shareholders to employees even when FCF looks strong.",
+        "min": 0.0,
+        "max": 0.30,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "diluted_share_growth": {
+        "label": "Diluted Share Growth",
+        "unit": "percent",
+        "group": "Dilution",
+        "description": "Annual increase or decrease in diluted shares during the forecast period.",
+        "model_line": "Diluted Shares",
+        "affects": ["Fair Value Per Share", "Owner Dilution"],
+        "default_source": "Recent diluted share count trend.",
+        "reasonable_range": "Buybacks can be negative; heavy SBC can make this positive.",
+        "warning": "Per-share value can fall even if enterprise value rises when dilution is high.",
+        "min": -0.10,
+        "max": 0.20,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "diluted_shares": {
+        "label": "Diluted Shares",
+        "unit": "shares",
+        "group": "Dilution",
+        "description": "Share count used to convert equity value into fair value per share.",
+        "model_line": "Fair Value Per Share",
+        "affects": ["Fair Value Per Share"],
+        "default_source": "Reported diluted shares or market provider shares outstanding.",
+        "reasonable_range": "Should tie to latest diluted share count, not basic shares, when available.",
+        "warning": "Wrong share count directly distorts per-share value.",
+        "source": "Reported",
+    },
+    "margin_of_safety": {
+        "label": "Margin of Safety",
+        "unit": "percent",
+        "group": "Terminal Value",
+        "description": "Discount applied to fair value to calculate the buy-zone price.",
+        "model_line": "Buy Zone",
+        "affects": ["Buy Price", "Decision Readout"],
+        "default_source": "Model default based on uncertainty.",
+        "reasonable_range": "Usually 20%-40%; higher for weak confidence or high terminal-value dependence.",
+        "warning": "A low margin of safety assumes high confidence in the model.",
+        "min": 0.0,
+        "max": 0.60,
+        "step": 0.05,
+        "source": "User-edited",
+    },
+}
+
+
+ASSUMPTION_KEYS = list(ASSUMPTION_METADATA.keys())
+
+
+VALUATION_BASIS_OPTIONS = {
+    "OCF-based FCF": {
+        "mode": "FCF",
+        "description": "Uses operating cash flow minus maintenance and growth CAPEX. Best when OCF quality is reliable.",
+    },
+    "NOPAT bridge": {
+        "mode": "FCFF",
+        "description": "Uses normalized operating profit after tax plus non-cash items minus reinvestment. Best for normalized economic profitability.",
+    },
+    "Adjusted OCF-based FCF": {
+        "mode": "FCF",
+        "description": "Uses the OCF-based method while documenting adjustments for one-time or timing distortions. Best when reported OCF is noisy.",
+    },
+}
+
+
+def _assumption_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bounded_value(value, minimum, maximum):
+    number = _assumption_float(value, minimum)
+    return min(max(number, minimum), maximum)
+
+
+def _assumption_unit(key: str) -> str:
+    return ASSUMPTION_METADATA.get(key, {}).get("unit", "decimal")
+
+
+def format_assumption_value(value, unit: str) -> str:
+    if value is None:
+        return UNAVAILABLE
+    if unit == "percent":
+        return fmt_percent(value, 1)
+    if unit == "multiple":
+        return fmt_multiple(value, 1)
+    if unit == "per_share":
+        return fmt_per_share(value)
+    if unit == "money":
+        return fmt_money(value)
+    if unit == "years":
+        try:
+            return f"{int(float(value))} years"
+        except (TypeError, ValueError):
+            return UNAVAILABLE
+    if unit == "shares":
+        return fmt_shares(value)
+    if unit == "decimal":
+        return fmt_ratio(value, 2)
+    return str(value)
+
+
+def _parse_assumption_value(value, unit: str):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        return number / 100 if unit == "percent" and abs(number) > 1.5 else number
+    text = str(value).strip().replace(",", "").replace("$", "")
+    multiplier = 1.0
+    if text.endswith("%"):
+        text = text[:-1]
+        multiplier = 0.01
+    elif text.lower().endswith("x"):
+        text = text[:-1]
+    elif text.lower().endswith("b"):
+        text = text[:-1]
+        multiplier = 1e9
+    elif text.lower().endswith("m"):
+        text = text[:-1]
+        multiplier = 1e6
+    elif text.lower().endswith("k"):
+        text = text[:-1]
+        multiplier = 1e3
+    elif unit == "percent":
+        multiplier = 0.01
+    try:
+        return float(text) * multiplier
+    except ValueError:
+        return None
+
+
+def _assumption_source(key: str, scenario_scope: str, current_value, base_value) -> str:
+    if abs(_assumption_float(current_value) - _assumption_float(base_value)) > 0.000001:
+        return "User-edited" if scenario_scope == "User Case" else "Scenario-based"
+    return ASSUMPTION_METADATA.get(key, {}).get("source", "Scenario-based")
+
+
+def _derive_opex_pct(assumptions: dict) -> float:
+    if assumptions.get("opex_pct_revenue") is not None:
+        return _assumption_float(assumptions.get("opex_pct_revenue"))
+    gross = _assumption_float(assumptions.get("gross_margin"), 0.45)
+    operating = _assumption_float(assumptions.get("operating_margin"), 0.15)
+    return max(gross - operating, 0.0)
+
+
+def _normalize_assumption_bridge(assumptions: dict, direct_nopat_override: bool = False) -> dict:
+    normalized = dict(assumptions)
+    gross = _assumption_float(normalized.get("gross_margin"), 0.45)
+    opex = _assumption_float(normalized.get("opex_pct_revenue"), _derive_opex_pct(normalized))
+    tax_rate = _assumption_float(normalized.get("tax_rate"), 0.21)
+    operating_margin = gross - opex
+    normalized["opex_pct_revenue"] = opex
+    normalized["operating_margin"] = operating_margin
+    if not direct_nopat_override:
+        normalized["nopat_margin"] = operating_margin * (1 - tax_rate)
+    return normalized
+
+
+def _build_assumption_scenarios(base: dict, user: dict | None = None) -> dict:
+    base_case = _normalize_assumption_bridge(base)
+    bear = dict(base_case)
+    bull = dict(base_case)
+    for key, delta in {
+        "revenue_cagr": -0.03,
+        "gross_margin": -0.03,
+        "ocf_margin": -0.03,
+        "growth_capex_pct_revenue": 0.02,
+        "wacc": 0.015,
+        "terminal_growth": -0.01,
+        "terminal_multiple": -2.0,
+    }.items():
+        bear[key] = _assumption_float(bear.get(key)) + delta
+    for key, delta in {
+        "revenue_cagr": 0.05,
+        "gross_margin": 0.03,
+        "ocf_margin": 0.03,
+        "growth_capex_pct_revenue": -0.01,
+        "wacc": -0.01,
+        "terminal_growth": 0.01,
+        "terminal_multiple": 2.0,
+    }.items():
+        bull[key] = _assumption_float(bull.get(key)) + delta
     return {
-        **base,
-        "forecast_years": forecast_years,
-        "dcf_mode": dcf_mode or "FCFF",
-        "revenue_cagr": revenue_cagr,
-        "gross_margin": gross_margin,
-        "operating_margin": ebit_margin,
-        "nopat_margin": nopat_margin,
-        "tax_rate": tax_rate,
-        "ocf_margin": ocf_margin,
-        "sm_pct_revenue": sm_pct,
-        "rd_pct_revenue": rd_pct,
-        "ga_pct_revenue": ga_pct,
-        "maintenance_capex_pct_revenue": maint_capex,
-        "growth_capex_pct_revenue": growth_capex,
-        "working_capital_pct_revenue": working_capital,
-        "sbc_pct_revenue": sbc_pct,
-        "wacc": wacc,
-        "terminal_growth": terminal_growth,
-        "terminal_multiple": terminal_multiple,
-        "diluted_share_growth": share_growth,
-        "diluted_shares": shares,
-        "margin_of_safety": margin_of_safety,
+        "Base Case": base_case,
+        "Bear Case": _normalize_assumption_bridge(bear),
+        "Bull Case": _normalize_assumption_bridge(bull),
+        "User Case": _normalize_assumption_bridge(user or base_case),
     }
+
+
+def _market_implied_assumptions(reverse: dict, base: dict) -> dict:
+    return {
+        "revenue_cagr": reverse.get("implied_revenue_cagr"),
+        "nopat_margin": reverse.get("implied_nopat_margin"),
+        "ocf_margin": reverse.get("implied_ocf_margin"),
+        "terminal_growth": reverse.get("implied_terminal_growth"),
+        "terminal_multiple": reverse.get("implied_terminal_multiple"),
+        "wacc": reverse.get("implied_wacc"),
+        "gross_margin": base.get("gross_margin"),
+        "opex_pct_revenue": _derive_opex_pct(base),
+        "maintenance_capex_pct_revenue": base.get("maintenance_capex_pct_revenue"),
+        "growth_capex_pct_revenue": base.get("growth_capex_pct_revenue"),
+        "working_capital_pct_revenue": base.get("working_capital_pct_revenue"),
+        "diluted_shares": base.get("diluted_shares"),
+    }
+
+
+def calculate_assumption_impact(base_assumptions: dict, edited_assumptions: dict, changed_key: str, historicals: pd.DataFrame, market_data: dict) -> dict:
+    base_dcf = run_dcf(historicals, market_data, _normalize_assumption_bridge(base_assumptions))
+    single_change = _normalize_assumption_bridge({**base_assumptions, changed_key: edited_assumptions.get(changed_key)})
+    changed_dcf = run_dcf(historicals, market_data, single_change)
+    base_fv = base_dcf.get("fair_value_per_share")
+    new_fv = changed_dcf.get("fair_value_per_share")
+    delta = (new_fv - base_fv) if base_fv is not None and new_fv is not None else None
+    pct = (delta / base_fv) if delta is not None and base_fv else None
+    return {"fair_value_delta": delta, "fair_value_delta_pct": pct, "new_fair_value": new_fv}
+
+
+def _scenario_comparison_table(scenarios: dict, reverse: dict, user_assumptions: dict) -> pd.DataFrame:
+    market_case = _market_implied_assumptions(reverse or {}, scenarios["Base Case"])
+    rows = []
+    for key in [
+        "revenue_cagr",
+        "gross_margin",
+        "opex_pct_revenue",
+        "nopat_margin",
+        "ocf_margin",
+        "maintenance_capex_pct_revenue",
+        "growth_capex_pct_revenue",
+        "working_capital_pct_revenue",
+        "wacc",
+        "terminal_growth",
+        "terminal_multiple",
+        "diluted_shares",
+    ]:
+        meta = ASSUMPTION_METADATA[key]
+        unit = meta["unit"]
+        rows.append(
+            {
+                "Assumption": meta["label"],
+                "Bear": format_assumption_value(scenarios["Bear Case"].get(key), unit),
+                "Base": format_assumption_value(scenarios["Base Case"].get(key), unit),
+                "Bull": format_assumption_value(scenarios["Bull Case"].get(key), unit),
+                "User": format_assumption_value(user_assumptions.get(key), unit),
+                "Market-Implied": format_assumption_value(market_case.get(key), unit),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _profile_assumption_note(profile: str, key: str) -> str:
+    if profile == "SaaS / Software":
+        notes = {
+            "opex_pct_revenue": "For software, OPEX % revenue mainly reflects sales efficiency, R&D scale, and G&A leverage.",
+            "ocf_margin": "For software, OCF margin can be supported by upfront billing and deferred revenue. Check timing distortions.",
+        }
+    elif profile == "Industrial / Hardware":
+        notes = {
+            "opex_pct_revenue": "For industrial/hardware firms, OPEX may improve with scale, but gross margin and CAPEX efficiency often matter more.",
+            "ocf_margin": "For industrial/hardware firms, OCF can be pressured by inventory build, receivables, and backlog conversion timing.",
+            "growth_capex_pct_revenue": "Growth CAPEX may be needed for capacity expansion, equipment, automation, or backlog conversion.",
+        }
+    elif profile == "Marketplace / Platform":
+        notes = {
+            "opex_pct_revenue": "For platforms, OPEX depends on marketing intensity, platform investment, and trust/safety costs.",
+            "ocf_margin": "For platforms, OCF depends on take rate, payment timing, and working capital structure.",
+        }
+    else:
+        notes = {}
+    return notes.get(key, "Use company history, peer economics, and filing evidence before changing this assumption.")
+
+
+def validate_assumption_ranges(assumptions: dict, historicals: pd.DataFrame | None = None, peer_data=None, moat_analysis=None) -> list[dict]:
+    warnings = []
+    revenue_cagr = _assumption_float(assumptions.get("revenue_cagr"))
+    terminal_growth = _assumption_float(assumptions.get("terminal_growth"))
+    opex = _assumption_float(assumptions.get("opex_pct_revenue"), _derive_opex_pct(assumptions))
+    ocf_margin = _assumption_float(assumptions.get("ocf_margin"))
+    growth_capex = _assumption_float(assumptions.get("growth_capex_pct_revenue"))
+    wacc = _assumption_float(assumptions.get("wacc"))
+    if revenue_cagr > 0.25:
+        warnings.append({"Assumption": "Revenue CAGR", "Current Value": format_assumption_value(revenue_cagr, "percent"), "Severity": "High", "Reason": "Revenue CAGR above 25% requires strong evidence.", "Suggested Review": "Check backlog, pricing, volume, capacity, and market expansion evidence."})
+    if terminal_growth > 0.03:
+        warnings.append({"Assumption": "Terminal Growth", "Current Value": format_assumption_value(terminal_growth, "percent"), "Severity": "High", "Reason": "Terminal growth above 3% requires explicit durable moat evidence.", "Suggested Review": "Review moat score, industry maturity, and long-run GDP/inflation anchor."})
+    if opex < 0:
+        warnings.append({"Assumption": "OPEX % Revenue", "Current Value": format_assumption_value(opex, "percent"), "Severity": "High", "Reason": "OPEX cannot be negative in a normal operating model.", "Suggested Review": "Review gross margin and operating margin bridge."})
+    if wacc < 0.06:
+        warnings.append({"Assumption": "WACC", "Current Value": format_assumption_value(wacc, "percent"), "Severity": "Medium", "Reason": "Very low WACC can overstate fair value.", "Suggested Review": "Check company size, leverage, cyclicality, and visibility."})
+    if wacc > 0.15:
+        warnings.append({"Assumption": "WACC", "Current Value": format_assumption_value(wacc, "percent"), "Severity": "Medium", "Reason": "Very high WACC may reflect an elevated-risk case.", "Suggested Review": "Confirm risk premium and scenario intent."})
+    if historicals is not None and not historicals.empty:
+        if "OCF Margin" in historicals and not historicals["OCF Margin"].dropna().empty:
+            historical_max = historicals["OCF Margin"].dropna().max()
+            if ocf_margin > historical_max + 0.05:
+                warnings.append({"Assumption": "OCF Margin", "Current Value": format_assumption_value(ocf_margin, "percent"), "Severity": "Medium", "Reason": "OCF margin is materially above recent history.", "Suggested Review": "Check receivables, inventory, deferred revenue, and one-time cash items."})
+        if "Total CAPEX" in historicals and "Revenue" in historicals:
+            capex_pct = (historicals["Total CAPEX"] / historicals["Revenue"].replace(0, pd.NA)).dropna()
+            if not capex_pct.empty and growth_capex < max(float(capex_pct.median()) * 0.25, 0.005):
+                warnings.append({"Assumption": "Growth CAPEX % Revenue", "Current Value": format_assumption_value(growth_capex, "percent"), "Severity": "Low", "Reason": "Growth CAPEX is well below historical CAPEX intensity.", "Suggested Review": "Confirm reinvestment needs and whether maintenance CAPEX already captures the spend."})
+    return warnings
+
+
+def _render_assumption_explanation(key: str, profile: str, scope: str, source: str, fair_value_impact: dict | None = None) -> None:
+    meta = ASSUMPTION_METADATA[key]
+    impact = " -> ".join(meta.get("affects", []))
+    impact_text = ""
+    if fair_value_impact and fair_value_impact.get("fair_value_delta") is not None:
+        impact_text = f"Fair Value Impact: {fmt_per_share(fair_value_impact.get('fair_value_delta'))} / share ({fmt_percent(fair_value_impact.get('fair_value_delta_pct'))})."
+    st.markdown(
+        f"""
+        <div class="pa-box">
+            <div class="pa-box-title">Selected Assumption Explanation</div>
+            <strong>{meta["label"]}</strong><br/>
+            <span class="pa-pill">{scope}</span><span class="pa-pill">{source}</span><br/>
+            <strong>What it means:</strong> {meta["description"]}<br/>
+            <strong>Model impact:</strong> {impact}<br/>
+            <strong>Default source:</strong> {meta["default_source"]}<br/>
+            <strong>Reasonable range:</strong> {meta["reasonable_range"]}<br/>
+            <strong>Profile note:</strong> {_profile_assumption_note(profile, key)}<br/>
+            <strong>Warning:</strong> {meta["warning"]}<br/>
+            <strong>{impact_text}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_assumption_slider(
+    key: str,
+    current_value: float,
+    base_value: float,
+    min_value: float,
+    max_value: float,
+    step: float,
+    scenario_scope: str,
+):
+    meta = ASSUMPTION_METADATA[key]
+    unit = meta["unit"]
+    delta = _assumption_float(current_value) - _assumption_float(base_value)
+    delta_text = format_assumption_value(delta, unit) if unit != "percent" else f"{delta * 100:+.1f} pts"
+    source = _assumption_source(key, scenario_scope, current_value, base_value)
+    label = f"{meta['label']} | {scenario_scope}: {format_assumption_value(current_value, unit)} | Base: {format_assumption_value(base_value, unit)} | Delta {delta_text}"
+    st.caption(f"Scope: {scenario_scope} only | Source: {source} | Affects: {' -> '.join(meta['affects'])}")
+    if unit == "percent":
+        slider_value = st.slider(
+            label,
+            min_value=min_value * 100,
+            max_value=max_value * 100,
+            value=_bounded_value(current_value, min_value, max_value) * 100,
+            step=step * 100,
+            format="%.1f%%",
+            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
+            key=f"assumption_slider_{scenario_scope}_{key}",
+        )
+        return slider_value / 100
+    if unit == "multiple":
+        return st.slider(
+            label,
+            min_value=float(min_value),
+            max_value=float(max_value),
+            value=_bounded_value(current_value, min_value, max_value),
+            step=float(step),
+            format="%.1fx",
+            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
+            key=f"assumption_slider_{scenario_scope}_{key}",
+        )
+    if unit == "years":
+        return st.slider(
+            label,
+            min_value=int(min_value),
+            max_value=int(max_value),
+            value=int(_bounded_value(current_value, min_value, max_value)),
+            step=int(step),
+            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
+            key=f"assumption_slider_{scenario_scope}_{key}",
+        )
+    if unit == "shares":
+        return st.number_input(
+            label,
+            min_value=0.0,
+            value=max(float(current_value or 0), 0.0),
+            step=1_000_000.0,
+            format="%.0f",
+            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
+            key=f"assumption_number_{scenario_scope}_{key}",
+        )
+    return st.slider(
+        label,
+        min_value=float(min_value),
+        max_value=float(max_value),
+        value=_bounded_value(current_value, min_value, max_value),
+        step=float(step),
+        help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
+        key=f"assumption_slider_{scenario_scope}_{key}",
+    )
+
+
+def _assumption_change_rows(base: dict, edited: dict, scenario_scope: str, historicals: pd.DataFrame, market: dict) -> list[dict]:
+    rows = []
+    for key in ASSUMPTION_KEYS:
+        old_value = base.get(key)
+        new_value = edited.get(key)
+        if abs(_assumption_float(new_value) - _assumption_float(old_value)) <= 0.000001:
+            continue
+        meta = ASSUMPTION_METADATA[key]
+        impact = calculate_assumption_impact(base, edited, key, historicals, market)
+        rows.append(
+            {
+                "Active": True,
+                "Scenario": scenario_scope,
+                "Assumption": meta["label"],
+                "Old Value": format_assumption_value(old_value, meta["unit"]),
+                "New Value": format_assumption_value(new_value, meta["unit"]),
+                "Delta": format_assumption_value(_assumption_float(new_value) - _assumption_float(old_value), meta["unit"]) if meta["unit"] != "percent" else f"{(_assumption_float(new_value) - _assumption_float(old_value)) * 100:+.1f} pts",
+                "Source": _assumption_source(key, scenario_scope, new_value, old_value),
+                "User Note": "",
+                "Fair Value Impact": fmt_per_share(impact.get("fair_value_delta")),
+                "Confidence": "Medium",
+            }
+        )
+    return rows
+
+
+def _apply_active_change_log(base: dict, edited: dict, log_rows: list[dict]) -> dict:
+    assumptions = dict(edited)
+    label_to_key = {meta["label"]: key for key, meta in ASSUMPTION_METADATA.items()}
+    for row in log_rows:
+        if not row.get("Active", True):
+            key = row.get("Key") or label_to_key.get(row.get("Assumption"))
+            if key:
+                assumptions[key] = base.get(key)
+            continue
+        key = row.get("Key") or label_to_key.get(row.get("Assumption"))
+        if not key:
+            continue
+        parsed = _parse_assumption_value(row.get("New Value"), _assumption_unit(key))
+        if parsed is not None:
+            assumptions[key] = parsed
+    return _normalize_assumption_bridge(assumptions, bool(assumptions.get("use_direct_nopat_override")))
+
+
+def _assumption_editor(ctx: dict) -> dict:
+    base = _normalize_assumption_bridge(ctx["base_assumptions"])
+    market = ctx["dataset"].get("market_data", {})
+    historicals = ctx["historicals"]
+    reverse = ctx.get("reverse", {})
+    profile = infer_stock_profile(ctx["dataset"])
+    user_state_key = f"assumption_user_case_{ctx['dataset'].get('ticker', 'default')}"
+    st.session_state.setdefault(user_state_key, dict(base))
+
+    st.subheader("DCF Assumption Workbench")
+    st.caption("Adjust assumptions with clear scenario scope, source, model impact, fair-value impact, and notes. The data-fetching layer is unchanged.")
+
+    scope_col, compare_col = st.columns([0.58, 0.42])
+    with scope_col:
+        scenario_scope = st.segmented_control(
+            "Which case are you editing?",
+            ["User Case", "Base Case", "Bull Case", "Bear Case"],
+            default="User Case",
+            help="Choose which valuation case your assumption changes apply to. User Case is recommended for personal adjustments. Base/Bull/Bear should only be changed if you want to redefine the scenario framework.",
+        )
+        scenario_scope = scenario_scope or "User Case"
+    with compare_col:
+        compare_to = st.selectbox("Compare assumption changes against", ["Base Case", "Market-Implied Case", "Prior User Case"], index=0)
+
+    st.markdown(f'<span class="pa-pill pa-pill-ok">You are editing: {scenario_scope}</span> <span class="pa-pill">Compare: Current {scenario_scope} vs {compare_to}</span>', unsafe_allow_html=True)
+    if scenario_scope != "User Case":
+        st.warning("You are editing a core scenario. Consider using User Case unless you intentionally want to redefine the model framework.")
+
+    scenarios = _build_assumption_scenarios(base, st.session_state[user_state_key])
+    working = dict(scenarios[scenario_scope])
+    prior_user_case = dict(st.session_state[user_state_key])
+
+    preset_cols = st.columns(4)
+    if preset_cols[0].button("Reset User Case to Base", key="reset_user_case_to_base"):
+        st.session_state[user_state_key] = dict(scenarios["Base Case"])
+        working = dict(st.session_state[user_state_key])
+        st.success("User Case reset to Base Case.")
+    if preset_cols[1].button("Copy Bull Case to User Case", key="copy_bull_to_user_case"):
+        st.session_state[user_state_key] = dict(scenarios["Bull Case"])
+        working = dict(st.session_state[user_state_key])
+        st.success("Bull Case copied to User Case.")
+    if preset_cols[2].button("Copy Bear Case to User Case", key="copy_bear_to_user_case"):
+        st.session_state[user_state_key] = dict(scenarios["Bear Case"])
+        working = dict(st.session_state[user_state_key])
+        st.success("Bear Case copied to User Case.")
+    expanded = preset_cols[3].toggle("Expanded Assumption Workbench", value=True, help="Use a wider, always-visible workbench layout for assumption review.")
+
+    st.markdown('<div class="pa-section-title">Valuation Basis</div>', unsafe_allow_html=True)
+    basis_default = next((label for label, item in VALUATION_BASIS_OPTIONS.items() if item["mode"] == str(working.get("dcf_mode", "FCFF")).upper()), "NOPAT bridge")
+    basis = st.segmented_control("Current valuation basis", list(VALUATION_BASIS_OPTIONS.keys()), default=basis_default)
+    basis = basis or basis_default
+    st.caption(VALUATION_BASIS_OPTIONS[basis]["description"])
+    working["dcf_mode"] = VALUATION_BASIS_OPTIONS[basis]["mode"]
+
+    direct_nopat_override = st.toggle(
+        "Use direct NOPAT margin override instead of OPEX-derived EBIT bridge",
+        value=bool(working.get("use_direct_nopat_override", False)),
+        help="Off: NOPAT is derived from Gross Margin minus OPEX % Revenue, then tax. On: the Direct NOPAT Margin slider controls NOPAT directly.",
+    )
+    working["use_direct_nopat_override"] = direct_nopat_override
+
+    comparison = _scenario_comparison_table(scenarios, reverse, working)
+    st.markdown('<div class="pa-section-title">Scenario Comparison Mini Table</div>', unsafe_allow_html=True)
+    show_table(comparison, "Scenario comparison unavailable.")
+
+    selected_key = st.selectbox(
+        "Selected assumption explanation",
+        ASSUMPTION_KEYS,
+        format_func=lambda key: ASSUMPTION_METADATA[key]["label"],
+        help="Pick an assumption to see definition, scope, source, reasonable range, and model impact.",
+    )
+
+    edited = dict(working)
+    group_keys = {
+        group: [key for key in ASSUMPTION_KEYS if ASSUMPTION_METADATA[key]["group"] == group]
+        for group in ASSUMPTION_GROUPS
+    }
+    selected_group = st.segmented_control(
+        "Assumption Groups",
+        list(ASSUMPTION_GROUPS.keys()),
+        default="Growth",
+        help="Move between assumption groups without losing scenario scope.",
+    )
+    selected_group = selected_group or "Growth"
+    st.caption(ASSUMPTION_GROUPS[selected_group])
+    for key in group_keys[selected_group]:
+        if key == "nopat_margin" and not direct_nopat_override:
+            st.info("Direct NOPAT Margin is inactive because the OPEX-derived EBIT bridge is active.")
+            continue
+        meta = ASSUMPTION_METADATA[key]
+        if "min" in meta:
+            edited[key] = render_assumption_slider(
+                key,
+                edited.get(key),
+                base.get(key),
+                meta["min"],
+                meta["max"],
+                meta["step"],
+                scenario_scope,
+            )
+        else:
+            edited[key] = render_assumption_slider(
+                key,
+                edited.get(key),
+                base.get(key),
+                0,
+                max(float(edited.get(key) or base.get(key) or 0) * 2, 1.0),
+                1.0,
+                scenario_scope,
+            )
+        with st.expander(f"What does {meta['label']} affect?"):
+            _render_assumption_explanation(
+                key,
+                profile,
+                f"{scenario_scope} only",
+                _assumption_source(key, scenario_scope, edited.get(key), base.get(key)),
+                calculate_assumption_impact(base, edited, key, historicals, market),
+            )
+    group_changed = [
+        key for key in group_keys[selected_group]
+        if abs(_assumption_float(edited.get(key)) - _assumption_float(base.get(key))) > 0.000001
+    ]
+    st.caption(f"Mini impact summary: {len(group_changed)} changed assumptions in {selected_group}.")
+
+    edited = _normalize_assumption_bridge(edited, direct_nopat_override)
+    if scenario_scope == "User Case":
+        st.session_state[user_state_key] = dict(edited)
+
+    selected_impact = calculate_assumption_impact(base, edited, selected_key, historicals, market)
+    _render_assumption_explanation(
+        selected_key,
+        profile,
+        f"{scenario_scope} only",
+        _assumption_source(selected_key, scenario_scope, edited.get(selected_key), base.get(selected_key)),
+        selected_impact,
+    )
+
+    active_warnings = validate_assumption_ranges(edited, historicals, ctx.get("peer_df"), ctx.get("moat"))
+    if active_warnings:
+        st.markdown('<div class="pa-section-title">Range Validation Warnings</div>', unsafe_allow_html=True)
+        show_table(pd.DataFrame(active_warnings), "No range warnings.")
+
+    st.markdown('<div class="pa-section-title">Fair Value Impact</div>', unsafe_allow_html=True)
+    base_fv = run_dcf(historicals, market, base).get("fair_value_per_share")
+    edited_fv = run_dcf(historicals, market, edited).get("fair_value_per_share")
+    fv_delta = (edited_fv - base_fv) if edited_fv is not None and base_fv is not None else None
+    metric_row(
+        [
+            ("Base Fair Value", base_fv, "per_share"),
+            ("Edited Fair Value", edited_fv, "per_share"),
+            ("Change vs Base", fv_delta, "per_share"),
+        ]
+    )
+
+    user_note = st.text_area(
+        "Why are you changing this assumption?",
+        placeholder="Example: Backlog disclosure suggests higher revenue conversion, but new equipment raises growth CAPEX near term.",
+        key=f"assumption_note_{scenario_scope}",
+    )
+    change_rows = _assumption_change_rows(base, edited, scenario_scope, historicals, market)
+    for row in change_rows:
+        if not row.get("User Note"):
+            row["User Note"] = user_note
+    st.markdown('<div class="pa-section-title">Assumption Change Log</div>', unsafe_allow_html=True)
+    if change_rows:
+        edited_log = st.data_editor(
+            pd.DataFrame(change_rows),
+            width="stretch",
+            hide_index=True,
+            num_rows="dynamic",
+            disabled=["Old Value", "Delta", "Fair Value Impact", "Source"],
+            key=f"assumption_change_log_{scenario_scope}",
+        )
+        edited = _apply_active_change_log(base, edited, edited_log.to_dict("records"))
+        st.session_state["assumption_update_log"] = edited_log.to_dict("records")
+    else:
+        st.info("No active assumption changes versus Base Case.")
+
+    st.caption("Evidence-applied changes default to User Case only. Use the Evidence & Assumptions tab to explicitly send clauses into the editable log.")
+    if not expanded:
+        st.info("Expanded workbench is off; detailed explanations remain available inside each group expander.")
+    return edited
 
 
 def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_deep_sec: bool = False) -> dict:
@@ -1274,10 +2056,10 @@ def _overview(ctx: dict) -> None:
 
 def _valuation(ctx: dict) -> None:
     market = ctx["dataset"].get("market_data", {})
-    st.caption("Interactive DCF workflow: choose valuation mode, adjust assumptions, see valuation impact, then review detailed model.")
+    st.caption("DCF Assumption Workbench: choose scenario scope, edit assumptions with context, see fair-value impact, then review the detailed model.")
     left, right = st.columns([0.52, 0.48])
     with left:
-        assumptions = _assumption_editor(ctx["base_assumptions"])
+        assumptions = _assumption_editor(ctx)
     user_dcf = run_dcf(ctx["historicals"], market, assumptions)
     reverse = run_reverse_dcf(market, ctx["historicals"], assumptions)
     model_table = build_time_axis_financial_model(ctx["historicals"], user_dcf.get("forecast_table"), assumptions)
