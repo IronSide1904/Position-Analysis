@@ -33,6 +33,13 @@ STATUS_CLASS = {
 }
 
 
+def _render_html(markup: str) -> None:
+    if hasattr(st, "html"):
+        st.html(markup)
+    else:
+        st.markdown(markup, unsafe_allow_html=True)
+
+
 def _safe_text(value) -> str:
     if value is None:
         return UNAVAILABLE
@@ -53,7 +60,7 @@ def status_class(status: str | None, value=None) -> str:
 
 
 def apply_design_system() -> None:
-    st.markdown(
+    _render_html(
         """
         <style>
         :root {
@@ -247,34 +254,31 @@ def apply_design_system() -> None:
             .pa-cockpit-hero { padding: 16px; }
         }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
 def render_cockpit_header(title: str, subtitle: str, kicker: str = "Decision Cockpit") -> None:
-    st.markdown(
+    _render_html(
         f"""
         <div class="pa-cockpit-hero">
             <div class="pa-cockpit-kicker">{html.escape(_safe_text(kicker))}</div>
             <p class="pa-cockpit-title">{html.escape(_safe_text(title))}</p>
             <div class="pa-cockpit-subtitle">{html.escape(_safe_text(subtitle))}</div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
 def render_section(title: str, subtitle: str | None = None, kicker: str | None = None) -> None:
-    st.markdown(
+    _render_html(
         f"""
         <div class="pa-section-shell">
             <div class="pa-section-kicker">{html.escape(_safe_text(kicker or "Cockpit Section"))}</div>
             <div class="pa-section-heading">{html.escape(_safe_text(title))}</div>
             <div class="pa-section-copy">{html.escape(_safe_text(subtitle or ""))}</div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -313,7 +317,7 @@ def render_status_card(
 def render_status_grid(cards: Iterable[dict], numeric: bool = False) -> None:
     html_cards = [render_status_card(**card) for card in cards]
     cls = "pa-card-grid numeric" if numeric else "pa-card-grid"
-    st.markdown(f'<div class="{cls}">{"".join(html_cards)}</div>', unsafe_allow_html=True)
+    _render_html(f'<div class="{cls}">{"".join(html_cards)}</div>')
 
 
 def render_decision_summary(summary: dict) -> None:
@@ -330,7 +334,7 @@ def render_decision_summary(summary: dict) -> None:
         clean_items = [html.escape(_safe_text(item)) for item in items if _safe_text(item) != UNAVAILABLE]
         if clean_items:
             rows.append(f"<h4>{html.escape(label)}</h4><ul>{''.join(f'<li>{item}</li>' for item in clean_items)}</ul>")
-    st.markdown(f'<div class="pa-summary-panel">{"".join(rows) or "Summary unavailable."}</div>', unsafe_allow_html=True)
+    _render_html(f'<div class="pa-summary-panel">{"".join(rows) or "Summary unavailable."}</div>')
 
 
 def render_score_explanation(score_components: list[dict]) -> None:
