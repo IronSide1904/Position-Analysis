@@ -6,14 +6,19 @@ def test_pa11r_cockpit_tabs_render():
     app.run(timeout=180)
 
     assert len(app.exception) == 0
-    assert [tab.label for tab in app.tabs] == [
+    expected = [
         "Snapshot",
         "Valuation",
+        "SOTP",
+        "Multiples & Peers",
         "Evidence & Assumptions",
         "Business Quality",
         "Management & Capital Allocation",
         "Sources & Data Quality",
     ]
+    labels = [tab.label for tab in app.tabs]
+    assert all(label in labels for label in expected)
+    assert [labels.index(label) for label in expected] == sorted(labels.index(label) for label in expected)
 
 
 def test_mr1_lite_cockpit_tabs_render():

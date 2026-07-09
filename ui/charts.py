@@ -179,3 +179,124 @@ def ma_timeline_chart(ma: dict):
     fig = px.scatter(timeline, x="index", y="topic", hover_data=["event"], title="M&A Disclosure Timeline")
     fig.update_layout(margin=dict(l=10, r=10, t=40, b=10), height=300)
     return fig
+
+
+def sotp_segment_ev_chart(segment_table: pd.DataFrame):
+    if segment_table is None or segment_table.empty or "Segment EV" not in segment_table:
+        return empty_chart("SOTP segment contribution unavailable.")
+    frame = segment_table.copy()
+    fig = px.bar(frame, x="Segment", y="Segment EV", color="Confidence" if "Confidence" in frame else None, title="SOTP Segment EV Contribution")
+    fig.update_yaxes(title="Segment Enterprise Value", tickprefix="$", separatethousands=True)
+    fig.update_xaxes(title="Segment", automargin=True)
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=60), height=360)
+    return fig
+
+
+def sotp_value_mix_chart(segment_table: pd.DataFrame):
+    if segment_table is None or segment_table.empty or "Segment EV" not in segment_table:
+        return empty_chart("SOTP value mix unavailable.")
+    frame = segment_table.copy()
+    fig = px.pie(frame, names="Segment", values="Segment EV", title="Segment Value Mix", hole=0.45)
+    fig.update_traces(textinfo="label+percent", hovertemplate="%{label}<br>EV: $%{value:,.0f}<extra></extra>")
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=20), height=360)
+    return fig
+
+
+def sotp_revenue_vs_value_chart(segment_table: pd.DataFrame):
+    required = {"Segment", "Revenue", "Segment EV"}
+    if segment_table is None or segment_table.empty or not required.issubset(segment_table.columns):
+        return empty_chart("SOTP revenue versus value unavailable.")
+    frame = segment_table.copy()
+    fig = px.scatter(
+        frame,
+        x="Revenue",
+        y="Segment EV",
+        size="Segment EV",
+        color="Valuation Method" if "Valuation Method" in frame else None,
+        text="Segment",
+        title="Segment Revenue vs Segment Value",
+    )
+    fig.update_traces(textposition="top center")
+    fig.update_xaxes(title="Segment Revenue", tickprefix="$", separatethousands=True)
+    fig.update_yaxes(title="Segment Enterprise Value", tickprefix="$", separatethousands=True)
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=40), height=380)
+    return fig
+
+
+def sotp_implied_vs_peer_chart(segment_table: pd.DataFrame):
+    required = {"Segment", "Selected Multiple", "Peer Multiple"}
+    if segment_table is None or segment_table.empty or not required.issubset(segment_table.columns):
+        return empty_chart("Segment multiple comparison unavailable.")
+    frame = segment_table.copy()
+    melted = frame.melt("Segment", value_vars=["Selected Multiple", "Peer Multiple", "Market-Implied Multiple"], var_name="Multiple Type", value_name="Multiple")
+    melted = melted.dropna(subset=["Multiple"])
+    if melted.empty:
+        return empty_chart("Segment multiple comparison unavailable.")
+    fig = px.bar(melted, x="Segment", y="Multiple", color="Multiple Type", barmode="group", title="Segment Multiples vs Peer / Market-Implied")
+    fig.update_yaxes(title="Multiple", ticksuffix="x")
+    fig.update_xaxes(title="Segment", automargin=True)
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=70), height=380)
+    return fig
+
+
+def dcf_vs_sotp_chart(summary_table: pd.DataFrame):
+    if summary_table is None or summary_table.empty:
+        return empty_chart("DCF vs SOTP comparison unavailable.")
+    rows = []
+    for _, row in summary_table.iterrows():
+        rows.append({"Scenario": row.get("Scenario"), "Method": "SOTP Fair Value", "Fair Value": row.get("Fair Value / Share")})
+        if row.get("DCF Fair Value / Share") is not None:
+            rows.append({"Scenario": row.get("Scenario"), "Method": "DCF Fair Value", "Fair Value": row.get("DCF Fair Value / Share")})
+    frame = pd.DataFrame(rows).dropna(subset=["Fair Value"])
+    if frame.empty:
+        return empty_chart("DCF vs SOTP comparison unavailable.")
+    fig = px.bar(frame, x="Scenario", y="Fair Value", color="Method", barmode="group", title="DCF vs SOTP Fair Value")
+    fig.update_yaxes(title="Fair Value per Share", tickprefix="$", separatethousands=True)
+    fig.update_xaxes(title="Scenario", automargin=True)
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=70), height=380)
+    return fig
+
+
+def scenario_multiple_vs_peer_chart(multiples_table: pd.DataFrame, selected_multiple: str):
+    if multiples_table is None or multiples_table.empty:
+        return empty_chart("Scenario multiples unavailable.")
+    row = multiples_table[multiples_table["Metric"].astype(str) == selected_multiple]
+    if row.empty:
+        return empty_chart("Selected multiple unavailable.")
+    row = row.iloc[0]
+    scenarios = ["Bear Case", "Base Case", "Bull Case", "User Case", "Market-Implied Case", "SOTP Case", "Peer Median", "Sector Median"]
+    frame = pd.DataFrame({"Case": scenarios, "Multiple": [row.get(case) for case in scenarios]})
+    frame = frame.dropna(subset=["Multiple"])
+    if frame.empty:
+        return empty_chart("Selected multiple unavailable.")
+    fig = px.bar(frame, x="Case", y="Multiple", title=f"{selected_multiple}: Scenario Multiples vs Peer Median")
+    if "Yield" in selected_multiple:
+        fig.update_yaxes(title=selected_multiple, tickformat=".0%")
+    else:
+        fig.update_yaxes(title=selected_multiple, ticksuffix="x")
+    fig.update_xaxes(title="Scenario / Reference", tickangle=-20, automargin=True)
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=90), height=390)
+    return fig
+
+
+def premium_discount_heatmap(multiples_table: pd.DataFrame):
+    if multiples_table is None or multiples_table.empty:
+        return empty_chart("Premium / discount heatmap unavailable.")
+    scenarios = ["Current Company", "Bear Case", "Base Case", "Bull Case", "User Case", "Market-Implied Case", "SOTP Case"]
+    rows = []
+    for _, row in multiples_table.iterrows():
+        peer = row.get("Peer Median")
+        if peer in (None, 0):
+            continue
+        item = {"Metric": row.get("Metric")}
+        for scenario in scenarios:
+            value = row.get(scenario)
+            item[scenario] = (value / peer - 1) if value is not None and peer else None
+        rows.append(item)
+    frame = pd.DataFrame(rows).set_index("Metric") if rows else pd.DataFrame()
+    if frame.empty:
+        return empty_chart("Premium / discount heatmap unavailable.")
+    fig = px.imshow(frame, aspect="auto", color_continuous_scale="RdYlGn_r", title="Premium / Discount vs Peer Median")
+    fig.update_traces(texttemplate="%{z:.0%}", hovertemplate="Metric: %{y}<br>Case: %{x}<br>Premium/discount: %{z:.1%}<extra></extra>")
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=60), height=420)
+    return fig

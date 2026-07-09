@@ -31,7 +31,8 @@ from models.dcf_model import (
 from models.financial_model import build_ev_to_equity_bridge, build_historical_financial_table, build_source_evidence_table, build_time_axis_financial_model
 from models.reverse_dcf import compare_clause_to_reverse_dcf, run_reverse_dcf
 from models.scoring import score_investment
-from models.sotp_model import run_sotp
+from models.sotp_model import build_default_segment_data, run_sotp
+from models.multiples_model import calculate_current_multiples, peer_median_multiples
 from ui.charts import (
     dcf_sensitivity_heatmap,
     fcf_projection_chart,
@@ -70,6 +71,8 @@ from ui.formatting import (
     fmt_shares,
     fmt_volume,
 )
+from ui.multiples import render_multiples_tab
+from ui.sotp import get_active_sotp, render_sotp_tab
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -605,6 +608,40 @@ def _valuation_view(ctx: dict) -> tuple[str, str, str]:
     if terminal and terminal > 0.65:
         subtitle += f" Terminal value is high at {fmt_percent(terminal)} of EV."
     return view, subtitle, status
+
+
+def _snapshot_valuation_cards(ctx: dict) -> list[dict]:
+    market = ctx.get("dataset", {}).get("market_data", {})
+    dcf = ctx.get("base_dcf", {})
+    try:
+        sotp = get_active_sotp(ctx, "Base Case")
+    except Exception:
+        segments = build_default_segment_data(ctx.get("historicals"), ctx.get("dataset", {}), ctx.get("base_assumptions", {}))
+        sotp = run_sotp(
+            segments,
+            market,
+            ctx.get("base_assumptions", {}),
+            scenario="Base Case",
+            dcf_output=dcf,
+            peer_multiples=ctx.get("peer_df"),
+            sector=ctx.get("dataset", {}).get("sector"),
+        )
+    current_multiples = calculate_current_multiples(ctx.get("historicals"), market)
+    peer_medians, _warnings = peer_median_multiples(ctx.get("peer_df"), ctx.get("dataset", {}).get("sector"), ctx.get("dataset", {}).get("industry"))
+    current_ev_ocf = current_multiples.get("EV/OCF")
+    peer_ev_ocf = peer_medians.get("EV/OCF")
+    premium = current_ev_ocf / peer_ev_ocf - 1 if current_ev_ocf is not None and peer_ev_ocf else None
+    multiple_risk = "High" if premium is not None and premium > 0.35 else "Medium" if premium is not None and premium > 0.15 else "Normal"
+    premium_text = fmt_percent(premium) if premium is not None else UNAVAILABLE
+    whole_status = "supportive" if ">" in str(sotp.get("whole_vs_sum")) else "warning" if "Overvalued" in str(sotp.get("whole_vs_sum")) else "neutral"
+    return [
+        {"title": "DCF Fair Value", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": "Intrinsic value anchor.", "status": "info"},
+        {"title": "SOTP Fair Value", "value": fmt_per_share(sotp.get("fair_value_per_share")), "subtitle": "Base-case sum-of-the-parts read.", "status": "info"},
+        {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Provider market price.", "status": "neutral"},
+        {"title": "Whole vs Parts", "value": sotp.get("whole_vs_sum") or "Unavailable", "subtitle": sotp.get("whole_vs_sum_interpretation"), "status": whole_status},
+        {"title": "Scenario Multiple Risk", "value": multiple_risk, "subtitle": f"Current EV/OCF premium vs peer: {premium_text}.", "status": "warning" if multiple_risk == "High" else "caution" if multiple_risk == "Medium" else "supportive"},
+        {"title": "Peer Premium / Discount", "value": premium_text, "subtitle": "Current EV/OCF versus peer/sector reference.", "status": "warning" if premium is not None and premium > 0.25 else "supportive" if premium is not None and premium < -0.15 else "neutral"},
+    ]
 
 
 def _risk_level(ctx: dict) -> tuple[str, str, str]:
@@ -2930,6 +2967,12 @@ def _pa11r_snapshot(ctx: dict) -> None:
             {"title": "Data Confidence", "value": confidence, "subtitle": confidence_subtitle, "status": confidence_status},
         ]
     )
+    render_section(
+        "Valuation Method Reconciliation",
+        "DCF, SOTP, and multiples are separate lenses. The snapshot only accepts the valuation read when they can be reconciled.",
+        "DCF / SOTP / Multiples",
+    )
+    render_status_grid(_snapshot_valuation_cards(ctx))
 
     c1, c2 = st.columns([0.58, 0.42])
     with c1:
@@ -3155,6 +3198,8 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
         [
             "Snapshot",
             "Valuation",
+            "SOTP",
+            "Multiples & Peers",
             "Evidence & Assumptions",
             "Business Quality",
             "Management & Capital Allocation",
@@ -3166,12 +3211,16 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
     with tabs[1]:
         _pa11r_valuation_tab(ctx, analyst_details)
     with tabs[2]:
-        _pa11r_evidence_assumptions_tab(ctx, analyst_details)
+        render_sotp_tab(ctx, analyst_details, key_prefix="pa11r_sotp")
     with tabs[3]:
-        _pa11r_business_quality_tab(ctx, analyst_details)
+        render_multiples_tab(ctx, key_prefix="pa11r_multiples")
     with tabs[4]:
-        _pa11r_management_tab(ctx, analyst_details)
+        _pa11r_evidence_assumptions_tab(ctx, analyst_details)
     with tabs[5]:
+        _pa11r_business_quality_tab(ctx, analyst_details)
+    with tabs[6]:
+        _pa11r_management_tab(ctx, analyst_details)
+    with tabs[7]:
         _sources_data_quality_tab(ctx, analyst_details)
 
 
