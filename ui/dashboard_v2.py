@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 
 import pandas as pd
@@ -1442,6 +1443,95 @@ def _bounded_value(value, minimum, maximum):
     return min(max(number, minimum), maximum)
 
 
+ASSUMPTION_RANGE_DEFAULTS = {
+    "revenue_cagr": {
+        "mature": {"min": -0.05, "max": 0.15, "step": 0.005},
+        "quality_growth": {"min": -0.05, "max": 0.25, "step": 0.005},
+        "high_growth": {"min": -0.10, "max": 0.40, "step": 0.005},
+        "turnaround": {"min": -0.20, "max": 0.30, "step": 0.005},
+        "default": {"min": -0.05, "max": 0.25, "step": 0.005},
+    },
+    "gross_margin": {"default": {"min": 0.00, "max": 0.90, "step": 0.005}},
+    "opex_pct_revenue": {"default": {"min": 0.00, "max": 1.00, "step": 0.005}},
+    "tax_rate": {"default": {"min": 0.00, "max": 0.40, "step": 0.005}},
+    "nopat_margin": {"default": {"min": -0.20, "max": 0.60, "step": 0.005}},
+    "ocf_margin": {"default": {"min": -0.20, "max": 0.60, "step": 0.005}},
+    "working_capital_pct_revenue": {"default": {"min": -0.10, "max": 0.20, "step": 0.005}},
+    "maintenance_capex_pct_revenue": {"default": {"min": 0.00, "max": 0.30, "step": 0.0025}},
+    "growth_capex_pct_revenue": {"default": {"min": 0.00, "max": 0.50, "step": 0.0025}},
+    "wacc": {"default": {"min": 0.06, "max": 0.18, "step": 0.0025}},
+    "terminal_growth": {"default": {"min": -0.02, "max": 0.05, "step": 0.001}},
+    "terminal_multiple": {"default": {"min": 5.0, "max": 35.0, "step": 0.5}},
+    "sbc_pct_revenue": {"default": {"min": 0.00, "max": 0.30, "step": 0.005}},
+    "diluted_share_growth": {"default": {"min": -0.10, "max": 0.20, "step": 0.005}},
+    "margin_of_safety": {"default": {"min": 0.00, "max": 0.60, "step": 0.025}},
+}
+
+
+def _profile_range_key(stock_profile: str, assumption_key: str, base_value: float | None = None) -> str:
+    profile = str(stock_profile or "").lower()
+    if assumption_key != "revenue_cagr":
+        return "default"
+    if "software" in profile or "platform" in profile:
+        return "high_growth" if (base_value or 0) >= 0.15 else "quality_growth"
+    if "energy" in profile or "commodity" in profile or "financial" in profile:
+        return "mature"
+    if "consumer" in profile or "industrial" in profile or "hardware" in profile:
+        return "quality_growth" if (base_value or 0) >= 0.08 else "mature"
+    if base_value is not None and base_value < 0:
+        return "turnaround"
+    return "default"
+
+
+def get_assumption_range(
+    assumption_key: str,
+    stock_profile: str,
+    historical_value: float | None = None,
+    base_value: float | None = None,
+    bear_value: float | None = None,
+    bull_value: float | None = None,
+    market_implied_value: float | None = None,
+) -> dict:
+    """
+    Return min, max, step, warning_level, and explanation for assumption control.
+    """
+    meta = ASSUMPTION_METADATA.get(assumption_key, {})
+    unit = meta.get("unit")
+    defaults = ASSUMPTION_RANGE_DEFAULTS.get(assumption_key)
+    if defaults:
+        range_key = _profile_range_key(stock_profile, assumption_key, base_value)
+        default_config = dict(defaults.get(range_key) or defaults.get("default"))
+    else:
+        default_config = {
+            "min": meta.get("min", 0.0),
+            "max": meta.get("max", max(_assumption_float(base_value, 0), 1.0)),
+            "step": meta.get("step", 1.0),
+        }
+    config = dict(default_config)
+    values = [
+        value
+        for value in [historical_value, base_value, bear_value, bull_value, market_implied_value]
+        if value is not None
+    ]
+    if values:
+        buffer = 2.0 if unit == "multiple" else 0.03 if unit == "percent" else max(abs(max(values, key=abs)) * 0.05, 1.0)
+        config["min"] = min(float(config["min"]), min(values) - buffer)
+        config["max"] = max(float(config["max"]), max(values) + buffer)
+    if unit == "percent":
+        config["min"] = max(float(config["min"]), -1.0)
+        config["max"] = min(float(config["max"]), 1.5)
+    if unit == "multiple":
+        config["min"] = max(float(config["min"]), 0.0)
+        config["max"] = min(float(config["max"]), 80.0)
+    expanded = bool(values and (min(values) < float(default_config["min"]) or max(values) > float(default_config["max"])))
+    if assumption_key == "revenue_cagr" and not expanded:
+        explanation = "Profile-aware range: normal companies use a tighter growth range; wider ranges appear only when evidence requires it."
+    else:
+        explanation = "Range expands automatically when base, bear, bull, historical, or market-implied values sit outside the default."
+    config.update({"warning_level": "expanded" if expanded else "normal", "explanation": explanation})
+    return config
+
+
 def _assumption_unit(key: str) -> str:
     return ASSUMPTION_METADATA.get(key, {}).get("unit", "decimal")
 
@@ -1640,6 +1730,40 @@ def _profile_assumption_note(profile: str, key: str) -> str:
     return notes.get(key, "Use company history, peer economics, and filing evidence before changing this assumption.")
 
 
+def _historical_assumption_value(historicals: pd.DataFrame | None, key: str):
+    if historicals is None or historicals.empty:
+        return None
+    if key in {"revenue_cagr", "diluted_share_growth"}:
+        return None
+    direct_column = {
+        "gross_margin": "Gross Margin",
+        "ocf_margin": "OCF Margin",
+        "nopat_margin": "NOPAT Margin",
+        "diluted_shares": "Diluted Shares",
+        "net_debt": "Net Debt",
+    }.get(key)
+    if direct_column and direct_column in historicals:
+        series = pd.to_numeric(historicals[direct_column], errors="coerce").dropna()
+        return float(series.iloc[-1]) if not series.empty else None
+    if "Revenue" not in historicals:
+        return None
+    revenue = pd.to_numeric(historicals["Revenue"], errors="coerce").replace(0, pd.NA)
+    ratio_column = {
+        "maintenance_capex_pct_revenue": "Maintenance CAPEX",
+        "growth_capex_pct_revenue": "Growth CAPEX",
+        "sbc_pct_revenue": "SBC",
+    }.get(key)
+    if ratio_column and ratio_column in historicals:
+        ratio = (pd.to_numeric(historicals[ratio_column], errors="coerce").abs() / revenue).dropna()
+        return float(ratio.iloc[-1]) if not ratio.empty else None
+    if key == "opex_pct_revenue" and {"Gross Margin", "EBIT"}.issubset(historicals.columns):
+        ebit_margin = (pd.to_numeric(historicals["EBIT"], errors="coerce") / revenue).dropna()
+        gross = pd.to_numeric(historicals["Gross Margin"], errors="coerce").dropna()
+        if not ebit_margin.empty and not gross.empty:
+            return max(float(gross.iloc[-1]) - float(ebit_margin.iloc[-1]), 0.0)
+    return None
+
+
 def validate_assumption_ranges(assumptions: dict, historicals: pd.DataFrame | None = None, peer_data=None, moat_analysis=None) -> list[dict]:
     warnings = []
     revenue_cagr = _assumption_float(assumptions.get("revenue_cagr"))
@@ -1695,6 +1819,62 @@ def _render_assumption_explanation(key: str, profile: str, scope: str, source: s
     )
 
 
+def _assumption_delta_text(delta: float | None, unit: str) -> str:
+    if delta is None:
+        return UNAVAILABLE
+    if unit == "percent":
+        return f"{delta * 100:+.1f} pts"
+    if unit == "multiple":
+        return f"{delta:+.1f}x"
+    if unit == "money":
+        return fmt_money(delta)
+    if unit == "shares":
+        return fmt_shares(delta)
+    return fmt_ratio(delta, 2)
+
+
+def _assumption_input_display(value: float | None, unit: str) -> float:
+    if unit == "percent":
+        return _assumption_float(value) * 100
+    if unit == "years":
+        return int(_assumption_float(value, 5))
+    return _assumption_float(value)
+
+
+def _assumption_input_model_value(value: float, unit: str):
+    if unit == "percent":
+        return value / 100
+    if unit == "years":
+        return int(value)
+    return value
+
+
+def _scenario_marker_pills(markers: list[tuple[str, object, str, str]]) -> str:
+    parts = []
+    for label, value, unit, status in markers:
+        text = format_assumption_value(value, unit)
+        css = "pa-pill-ok" if status == "user" else "pa-pill-warn" if status == "market" else ""
+        parts.append(f'<span class="pa-pill {css}">{html.escape(label)}: {html.escape(str(text))}</span>')
+    return " ".join(parts)
+
+
+def _control_warning(key: str, value: float | None, range_info: dict, historicals: pd.DataFrame | None = None) -> str | None:
+    value = _assumption_float(value)
+    if range_info.get("warning_level") == "expanded":
+        return "Range was expanded because a scenario, history, or market-implied value sits outside the normal profile range."
+    if key == "revenue_cagr" and value > 0.25:
+        return "Revenue CAGR above 25% requires strong evidence such as backlog, pricing power, capacity expansion, or secular growth."
+    if key == "terminal_growth" and value > 0.03:
+        return "Terminal growth above 3% requires durable moat evidence."
+    if key == "wacc" and value < 0.06:
+        return "WACC below 6% can overstate valuation unless risk is unusually low."
+    if key == "ocf_margin" and historicals is not None and not historicals.empty and "OCF Margin" in historicals:
+        historical_max = pd.to_numeric(historicals["OCF Margin"], errors="coerce").dropna()
+        if not historical_max.empty and value > float(historical_max.max()) + 0.05:
+            return "OCF margin is above recent history; require cash conversion evidence."
+    return None
+
+
 def render_assumption_slider(
     key: str,
     current_value: float,
@@ -1703,66 +1883,136 @@ def render_assumption_slider(
     max_value: float,
     step: float,
     scenario_scope: str,
+    *,
+    stock_profile: str = "General",
+    bear_value: float | None = None,
+    bull_value: float | None = None,
+    market_implied_value: float | None = None,
+    historical_value: float | None = None,
+    fair_value_impact: dict | None = None,
+    historicals: pd.DataFrame | None = None,
 ):
     meta = ASSUMPTION_METADATA[key]
     unit = meta["unit"]
+    range_info = get_assumption_range(
+        key,
+        stock_profile,
+        historical_value=historical_value,
+        base_value=base_value,
+        bear_value=bear_value,
+        bull_value=bull_value,
+        market_implied_value=market_implied_value,
+    )
+    min_value = range_info.get("min", min_value)
+    max_value = range_info.get("max", max_value)
+    step = range_info.get("step", step)
+    current_value = _bounded_value(current_value, min_value, max_value)
     delta = _assumption_float(current_value) - _assumption_float(base_value)
-    delta_text = format_assumption_value(delta, unit) if unit != "percent" else f"{delta * 100:+.1f} pts"
+    delta_text = _assumption_delta_text(delta, unit)
     source = _assumption_source(key, scenario_scope, current_value, base_value)
-    label = f"{meta['label']} | {scenario_scope}: {format_assumption_value(current_value, unit)} | Base: {format_assumption_value(base_value, unit)} | Delta {delta_text}"
-    st.caption(f"Scope: {scenario_scope} only | Source: {source} | Affects: {' -> '.join(meta['affects'])}")
+    impact = fair_value_impact or {}
+    impact_text = UNAVAILABLE
+    if impact.get("fair_value_delta") is not None:
+        impact_text = f"{fmt_per_share(impact.get('fair_value_delta'))} / share ({fmt_percent(impact.get('fair_value_delta_pct'))})"
+    market_text = format_assumption_value(market_implied_value, unit)
+    markers = [
+        ("Bear", bear_value, unit, "bear"),
+        ("Base", base_value, unit, "base"),
+        ("User", current_value, unit, "user"),
+        ("Bull", bull_value, unit, "bull"),
+        ("Market", market_implied_value, unit, "market"),
+    ]
+    st.markdown(
+        f"""
+        <div class="pa-box">
+            <div class="pa-box-title">{html.escape(meta["label"])}</div>
+            <strong>User Case:</strong> {html.escape(format_assumption_value(current_value, unit))}
+            &nbsp; <strong>Base:</strong> {html.escape(format_assumption_value(base_value, unit))}
+            &nbsp; <strong>Market-Implied:</strong> {html.escape(str(market_text))}
+            &nbsp; <strong>Delta vs Base:</strong> {html.escape(delta_text)}<br/>
+            <span class="pa-pill">Scope: {html.escape(scenario_scope)} only</span>
+            <span class="pa-pill">Source: {html.escape(source)}</span>
+            <span class="pa-pill">Range: {html.escape(format_assumption_value(min_value, unit))} to {html.escape(format_assumption_value(max_value, unit))}</span><br/>
+            <strong>Direction:</strong> Lower assumption &lt;- enter a smaller value | enter a larger value -&gt; Higher assumption<br/>
+            <strong>Purpose:</strong> {html.escape(meta["description"])}<br/>
+            <strong>Model impact:</strong> {html.escape(" -> ".join(meta.get("affects", [])))}<br/>
+            <strong>Fair-value impact:</strong> {html.escape(impact_text)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    input_min = _assumption_input_display(min_value, unit)
+    input_max = _assumption_input_display(max_value, unit)
+    input_value = _assumption_input_display(current_value, unit)
+    input_step = _assumption_input_display(step, unit) or 1.0
+    input_label = "User value (%)" if unit == "percent" else "User value"
     if unit == "percent":
-        slider_value = st.slider(
-            label,
-            min_value=min_value * 100,
-            max_value=max_value * 100,
-            value=_bounded_value(current_value, min_value, max_value) * 100,
-            step=step * 100,
-            format="%.1f%%",
-            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
-            key=f"assumption_slider_{scenario_scope}_{key}",
-        )
-        return slider_value / 100
-    if unit == "multiple":
-        return st.slider(
-            label,
-            min_value=float(min_value),
-            max_value=float(max_value),
-            value=_bounded_value(current_value, min_value, max_value),
-            step=float(step),
-            format="%.1fx",
-            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
-            key=f"assumption_slider_{scenario_scope}_{key}",
-        )
-    if unit == "years":
-        return st.slider(
-            label,
-            min_value=int(min_value),
-            max_value=int(max_value),
-            value=int(_bounded_value(current_value, min_value, max_value)),
-            step=int(step),
-            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
-            key=f"assumption_slider_{scenario_scope}_{key}",
-        )
-    if unit == "shares":
-        return st.number_input(
-            label,
-            min_value=0.0,
-            value=max(float(current_value or 0), 0.0),
-            step=1_000_000.0,
-            format="%.0f",
-            help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
+        edited_display = st.number_input(
+            input_label,
+            min_value=float(input_min),
+            max_value=float(input_max),
+            value=float(input_value),
+            step=float(input_step),
+            format="%.1f",
+            help=f"Enter the exact assumption value. Difference versus Base Case is {delta_text}.",
             key=f"assumption_number_{scenario_scope}_{key}",
         )
-    return st.slider(
-        label,
-        min_value=float(min_value),
-        max_value=float(max_value),
-        value=_bounded_value(current_value, min_value, max_value),
-        step=float(step),
-        help=f"{meta['description']} Reasonable range: {meta['reasonable_range']}",
-        key=f"assumption_slider_{scenario_scope}_{key}",
+    elif unit == "multiple":
+        edited_display = st.number_input(
+            input_label,
+            min_value=float(min_value),
+            max_value=float(max_value),
+            value=float(input_value),
+            step=float(step),
+            format="%.1fx",
+            help=f"Enter the exact multiple. Difference versus Base Case is {delta_text}.",
+            key=f"assumption_number_{scenario_scope}_{key}",
+        )
+    elif unit == "years":
+        edited_display = st.number_input(
+            input_label,
+            min_value=int(min_value),
+            max_value=int(max_value),
+            value=int(input_value),
+            step=int(step),
+            help="Enter the explicit forecast period.",
+            key=f"assumption_number_{scenario_scope}_{key}",
+        )
+    elif unit == "shares":
+        edited_display = st.number_input(
+            input_label,
+            min_value=max(0.0, float(min_value or 0)),
+            max_value=float(max_value),
+            value=max(float(input_value or 0), 0.0),
+            step=1_000_000.0,
+            format="%.0f",
+            help="Enter diluted shares used for per-share valuation.",
+            key=f"assumption_number_{scenario_scope}_{key}",
+        )
+    else:
+        edited_display = st.number_input(
+            input_label,
+            min_value=float(min_value),
+            max_value=float(max_value),
+            value=float(input_value),
+            step=float(step),
+            help=f"Enter the exact assumption value. Difference versus Base Case is {delta_text}.",
+            key=f"assumption_number_{scenario_scope}_{key}",
+        )
+    st.markdown(
+        f"""
+        <div class="pa-box">
+            <strong>Scenario markers:</strong><br/>
+            {_scenario_marker_pills(markers)}<br/>
+            <strong>Range logic:</strong> {html.escape(range_info.get("explanation", ""))}
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+    warning = _control_warning(key, _assumption_input_model_value(edited_display, unit), range_info, historicals)
+    if warning:
+        st.warning(warning)
+    return _assumption_input_model_value(edited_display, unit)
 
 
 def _assumption_change_rows(base: dict, edited: dict, scenario_scope: str, historicals: pd.DataFrame, market: dict) -> list[dict]:
@@ -1781,7 +2031,7 @@ def _assumption_change_rows(base: dict, edited: dict, scenario_scope: str, histo
                 "Assumption": meta["label"],
                 "Old Value": format_assumption_value(old_value, meta["unit"]),
                 "New Value": format_assumption_value(new_value, meta["unit"]),
-                "Delta": format_assumption_value(_assumption_float(new_value) - _assumption_float(old_value), meta["unit"]) if meta["unit"] != "percent" else f"{(_assumption_float(new_value) - _assumption_float(old_value)) * 100:+.1f} pts",
+                "Delta vs Base": _assumption_delta_text(_assumption_float(new_value) - _assumption_float(old_value), meta["unit"]),
                 "Source": _assumption_source(key, scenario_scope, new_value, old_value),
                 "User Note": "",
                 "Fair Value Impact": fmt_per_share(impact.get("fair_value_delta")),
@@ -1840,6 +2090,7 @@ def _assumption_editor(ctx: dict) -> dict:
     scenarios = _build_assumption_scenarios(base, st.session_state[user_state_key])
     working = dict(scenarios[scenario_scope])
     prior_user_case = dict(st.session_state[user_state_key])
+    market_case_assumptions = _market_implied_assumptions(reverse or {}, scenarios["Base Case"])
 
     preset_cols = st.columns(4)
     if preset_cols[0].button("Reset User Case to Base", key="reset_user_case_to_base"):
@@ -1899,6 +2150,7 @@ def _assumption_editor(ctx: dict) -> dict:
             st.info("Direct NOPAT Margin is inactive because the OPEX-derived EBIT bridge is active.")
             continue
         meta = ASSUMPTION_METADATA[key]
+        fair_value_impact = calculate_assumption_impact(base, edited, key, historicals, market)
         if "min" in meta:
             edited[key] = render_assumption_slider(
                 key,
@@ -1908,6 +2160,13 @@ def _assumption_editor(ctx: dict) -> dict:
                 meta["max"],
                 meta["step"],
                 scenario_scope,
+                stock_profile=profile,
+                bear_value=scenarios["Bear Case"].get(key),
+                bull_value=scenarios["Bull Case"].get(key),
+                market_implied_value=market_case_assumptions.get(key),
+                historical_value=_historical_assumption_value(historicals, key),
+                fair_value_impact=fair_value_impact,
+                historicals=historicals,
             )
         else:
             edited[key] = render_assumption_slider(
@@ -1918,6 +2177,13 @@ def _assumption_editor(ctx: dict) -> dict:
                 max(float(edited.get(key) or base.get(key) or 0) * 2, 1.0),
                 1.0,
                 scenario_scope,
+                stock_profile=profile,
+                bear_value=scenarios["Bear Case"].get(key),
+                bull_value=scenarios["Bull Case"].get(key),
+                market_implied_value=market_case_assumptions.get(key),
+                historical_value=_historical_assumption_value(historicals, key),
+                fair_value_impact=fair_value_impact,
+                historicals=historicals,
             )
         with st.expander(f"What does {meta['label']} affect?"):
             _render_assumption_explanation(
@@ -1979,7 +2245,7 @@ def _assumption_editor(ctx: dict) -> dict:
             width="stretch",
             hide_index=True,
             num_rows="dynamic",
-            disabled=["Old Value", "Delta", "Fair Value Impact", "Source"],
+            disabled=["Old Value", "Delta vs Base", "Fair Value Impact", "Source"],
             key=f"assumption_change_log_{scenario_scope}",
         )
         edited = _apply_active_change_log(base, edited, edited_log.to_dict("records"))
