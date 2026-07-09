@@ -20,6 +20,19 @@ from analysis.peers import build_peer_comparison, select_peer_candidates
 from analysis.risks import analyze_risks_and_thesis_breakers
 from analysis.thesis import build_thesis_summary
 from data_sources.loader import load_company_dataset
+from persistence.analysis_store import (
+    build_analysis_payload,
+    compare_analyses,
+    compute_state_hash,
+    delete_analysis,
+    duplicate_analysis,
+    export_analysis_json,
+    import_analysis_json,
+    list_saved_analyses,
+    load_analysis,
+    save_analysis,
+    update_analysis,
+)
 from models.dcf_model import (
     build_dcf_output_table,
     build_dcf_sensitivity_table,
@@ -32,8 +45,8 @@ from models.dcf_model import (
 from models.financial_model import build_ev_to_equity_bridge, build_historical_financial_table, build_source_evidence_table, build_time_axis_financial_model
 from models.reverse_dcf import compare_clause_to_reverse_dcf, run_reverse_dcf
 from models.scoring import score_investment
-from models.sotp_model import build_default_segment_data, run_sotp
-from models.multiples_model import calculate_current_multiples, peer_median_multiples
+from models.sotp_model import build_default_segment_data, run_sotp, run_sotp_scenarios, sotp_summary_table
+from models.multiples_model import calculate_current_multiples, calculate_scenario_implied_multiples, peer_median_multiples, sector_median_multiples
 from ui.charts import (
     dcf_sensitivity_heatmap,
     fcf_projection_chart,
@@ -2314,6 +2327,278 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
     }
 
 
+def _session_key_for_ticker(prefix: str, ticker: str) -> str:
+    return f"{prefix}_{ticker or 'default'}"
+
+
+def _current_user_assumptions(ctx: dict) -> dict:
+    ticker = ctx.get("dataset", {}).get("ticker", "default")
+    return dict(st.session_state.get(_session_key_for_ticker("assumption_user_case", ticker), ctx.get("base_assumptions", {})))
+
+
+def _current_sotp_segments(ctx: dict):
+    ticker = ctx.get("dataset", {}).get("ticker", "default")
+    return st.session_state.get(f"sotp_{ticker}_segments", build_default_segment_data(ctx.get("historicals"), ctx.get("dataset", {}), ctx.get("base_assumptions", {})))
+
+
+def _source_metadata_for_save(dataset: dict) -> dict:
+    filings = dataset.get("filings", {}) or {}
+    return {
+        "sec": {
+            "available": "SEC/EDGAR" in set(dataset.get("sources", [])),
+            "cik": dataset.get("cik"),
+            "latest_10k": filings.get("latest_10k"),
+            "latest_10q": filings.get("latest_10q"),
+            "latest_proxy": filings.get("latest_proxy"),
+            "warnings": dataset.get("warnings", []),
+        },
+        "finviz": {
+            "available": bool(dataset.get("finviz", {}).get("available")),
+            "fields_used": sorted([key for key, value in (dataset.get("market_data", {}) or {}).items() if value is not None]),
+            "warnings": [dataset.get("finviz", {}).get("error")] if dataset.get("finviz", {}).get("error") else [],
+        },
+        "yfinance": {
+            "available": bool(dataset.get("yfinance", {}).get("available")) or "yfinance" in set(dataset.get("sources", [])),
+            "warnings": [dataset.get("yfinance", {}).get("error")] if dataset.get("yfinance", {}).get("error") else [],
+        },
+    }
+
+
+def _dcf_scenario_outputs(ctx: dict, user_assumptions: dict) -> tuple[dict, dict]:
+    market = ctx.get("dataset", {}).get("market_data", {})
+    scenarios = _build_assumption_scenarios(ctx.get("base_assumptions", {}), user_assumptions)
+    market_case = _market_implied_assumptions(ctx.get("reverse", {}), scenarios["Base Case"])
+    scenarios["Market-Implied Case"] = _normalize_assumption_bridge({**scenarios["Base Case"], **{k: v for k, v in market_case.items() if v is not None}})
+    outputs = {case: run_dcf(ctx.get("historicals"), market, assumptions) for case, assumptions in scenarios.items()}
+    return scenarios, outputs
+
+
+def collect_dashboard_state(ctx: dict) -> dict:
+    dataset = ctx.get("dataset", {})
+    ticker = dataset.get("ticker", "default")
+    market = dataset.get("market_data", {})
+    user_assumptions = _current_user_assumptions(ctx)
+    dcf_scenarios, dcf_outputs = _dcf_scenario_outputs(ctx, user_assumptions)
+    sotp_segments = _current_sotp_segments(ctx)
+    sotp_outputs = run_sotp_scenarios(sotp_segments, market, user_assumptions, dcf_outputs.get("User Case"), ctx.get("peer_df"), dataset.get("sector"))
+    multiples_basis = st.session_state.get("pa11r_multiples_basis", "Normalized Year")
+    scenario_multiples = calculate_scenario_implied_multiples(dcf_outputs, ctx.get("historicals"), market, multiples_basis)
+    peer_medians, _warnings = peer_median_multiples(ctx.get("peer_df"), dataset.get("sector"), dataset.get("industry"))
+    sector_medians = sector_median_multiples(dataset.get("sector"), dataset.get("industry"))
+    swing_view, _swing_subtitle, _swing_status = _swing_view(ctx)
+    regime, _regime_subtitle, _regime_status = _market_regime(ctx)
+    scoring = ctx.get("scoring", {})
+    notes = st.session_state.get("pa11r_user_notes", {})
+    return {
+        "analysis_id": st.session_state.get("loaded_analysis_id"),
+        "created_at": st.session_state.get("loaded_analysis_created_at"),
+        "decision": {
+            "investment_view": scoring.get("recommendation"),
+            "swing_view": swing_view,
+            "market_regime": regime,
+            "final_rating": scoring.get("recommendation"),
+            "conviction": scoring.get("conviction"),
+            "position_size_guidance": scoring.get("position_size_guidance"),
+            "summary": ctx.get("thesis", {}).get("valuation_view", ""),
+        },
+        "data_sources": _source_metadata_for_save(dataset),
+        "dcf": {
+            "valuation_basis": st.session_state.get("dcf_valuation_basis", "OCF-based FCF"),
+            "scenario_assumptions": dcf_scenarios,
+            "scenario_outputs": dcf_outputs,
+            "selected_case": "User Case",
+            "assumption_update_log": st.session_state.get("assumption_update_log", []),
+        },
+        "sotp": {
+            "enabled": True,
+            "segment_assumptions": {"User Case": sotp_segments},
+            "scenario_outputs": sotp_outputs,
+            "manual_segments": sotp_segments,
+            "whole_vs_sum_conclusion": sotp_outputs.get("Base Case", {}).get("whole_vs_sum_interpretation", ""),
+        },
+        "multiples": {
+            "selected_multiple_basis": multiples_basis,
+            "selected_multiple": st.session_state.get("pa11r_multiples_selected_multiple", "EV/OCF"),
+            "peer_set": ctx.get("peer_df", pd.DataFrame()).to_dict("records") if isinstance(ctx.get("peer_df"), pd.DataFrame) else [],
+            "scenario_implied_multiples": scenario_multiples,
+            "peer_medians": peer_medians,
+            "sector_medians": sector_medians,
+            "user_notes": notes.get("valuation", ""),
+        },
+        "evidence": {
+            "clause_mappings": ctx.get("clauses", pd.DataFrame()),
+            "applied_evidence": st.session_state.get("assumption_update_log", []),
+            "ignored_evidence": [],
+            "manual_review_items": _manual_review_items(ctx),
+        },
+        "business_quality": {
+            "moat": ctx.get("moat", {}),
+            "risks": ctx.get("risks", {}),
+            "thesis_breakers": [],
+            "user_notes": notes.get("risks", ""),
+        },
+        "management_capital_allocation": {
+            "management": ctx.get("management", {}),
+            "ma_strategy": ctx.get("ma", {}),
+            "compensation_sbc": ctx.get("alignment", {}),
+            "user_notes": notes.get("management", ""),
+        },
+        "user_notes": {
+            "general": notes.get("general", ""),
+            "valuation": notes.get("valuation", ""),
+            "thesis": notes.get("thesis", ""),
+            "risks": notes.get("risks", ""),
+            "manual_review": notes.get("manual_review", ""),
+        },
+    }
+
+
+def restore_analysis_to_session_state(payload: dict, use_saved_market_snapshot: bool = False) -> None:
+    ticker = str(payload.get("ticker") or "").upper()
+    if ticker:
+        st.session_state["research_ticker"] = ticker
+    st.session_state["loaded_analysis_id"] = payload.get("analysis_id")
+    st.session_state["loaded_analysis_name"] = payload.get("analysis_name")
+    st.session_state["loaded_analysis_created_at"] = payload.get("created_at")
+    st.session_state["loaded_analysis_updated_at"] = payload.get("updated_at")
+    st.session_state["loaded_analysis_payload"] = payload
+    st.session_state["loaded_analysis_hash"] = compute_state_hash(payload)
+    if use_saved_market_snapshot:
+        st.session_state["loaded_market_snapshot"] = payload.get("market_snapshot_at_save", {})
+    user_case = payload.get("dcf", {}).get("scenario_assumptions", {}).get("User Case", {})
+    if ticker and user_case:
+        st.session_state[_session_key_for_ticker("assumption_user_case", ticker)] = user_case
+    st.session_state["assumption_update_log"] = payload.get("dcf", {}).get("assumption_update_log", [])
+    manual_segments = payload.get("sotp", {}).get("manual_segments", [])
+    if ticker and manual_segments:
+        st.session_state[f"sotp_{ticker}_segments"] = pd.DataFrame(manual_segments)
+    multiples = payload.get("multiples", {})
+    if multiples.get("selected_multiple_basis"):
+        st.session_state["pa11r_multiples_basis"] = multiples.get("selected_multiple_basis")
+    if multiples.get("selected_multiple"):
+        st.session_state["pa11r_multiples_selected_multiple"] = multiples.get("selected_multiple")
+    st.session_state["pa11r_user_notes"] = payload.get("user_notes", {})
+
+
+def _analysis_state_cards(ctx: dict) -> list[dict]:
+    loaded_name = st.session_state.get("loaded_analysis_name") or "Not loaded"
+    current_state = collect_dashboard_state(ctx)
+    current_hash = compute_state_hash(current_state)
+    saved_hash = st.session_state.get("loaded_analysis_hash")
+    unsaved = bool(saved_hash and current_hash != saved_hash)
+    status = "warning" if unsaved else "supportive" if saved_hash else "neutral"
+    value = "Unsaved Changes" if unsaved else "Saved" if saved_hash else "Not Saved"
+    return [
+        {
+            "title": "Analysis State",
+            "value": value,
+            "subtitle": f"Loaded analysis: {loaded_name}. Last saved: {st.session_state.get('loaded_analysis_updated_at') or 'Never'}.",
+            "status": status,
+        }
+    ]
+
+
+def _saved_analysis_metadata_table(ctx: dict) -> pd.DataFrame:
+    payload = st.session_state.get("loaded_analysis_payload") or {}
+    market = ctx.get("dataset", {}).get("market_data", {})
+    saved_market = payload.get("market_snapshot_at_save", {})
+    return pd.DataFrame(
+        [
+            {"Field": "Analysis ID", "Value": payload.get("analysis_id")},
+            {"Field": "Analysis Name", "Value": payload.get("analysis_name")},
+            {"Field": "Created", "Value": payload.get("created_at")},
+            {"Field": "Updated", "Value": payload.get("updated_at")},
+            {"Field": "Dashboard Version", "Value": payload.get("dashboard_version")},
+            {"Field": "Schema Version", "Value": payload.get("schema_version")},
+            {"Field": "Price at Save", "Value": saved_market.get("price")},
+            {"Field": "Current Price", "Value": market.get("price")},
+            {"Field": "Data Sources Used", "Value": ", ".join(ctx.get("dataset", {}).get("sources", []))},
+            {"Field": "Manual Review Items at Save", "Value": len(payload.get("evidence", {}).get("manual_review_items", [])) if payload else None},
+        ]
+    )
+
+
+def _render_saved_analysis_sidebar(ctx: dict) -> None:
+    dataset = ctx.get("dataset", {})
+    ticker = dataset.get("ticker", "")
+    with st.sidebar.expander("Save / Load Analysis", expanded=False):
+        notes = st.session_state.setdefault("pa11r_user_notes", {})
+        analysis_name = st.text_input("Analysis name", value=st.session_state.get("loaded_analysis_name") or f"{ticker} User Case", key="analysis_name_input")
+        description = st.text_area("Description", value=st.session_state.get("analysis_description", ""), placeholder="What changed in this analysis?", key="analysis_description")
+        tags_text = st.text_input("Tags", value=st.session_state.get("analysis_tags", ""), placeholder="watchlist, base-case, earnings-review", key="analysis_tags")
+        notes["general"] = st.text_area("General notes", value=notes.get("general", ""), key="analysis_notes_general", height=80)
+        notes["valuation"] = st.text_area("Valuation notes", value=notes.get("valuation", ""), key="analysis_notes_valuation", height=80)
+        st.session_state["pa11r_user_notes"] = notes
+        tags = [tag.strip() for tag in tags_text.split(",") if tag.strip()]
+        state = collect_dashboard_state(ctx)
+        payload = build_analysis_payload(ticker, dataset, state, analysis_name, description, tags)
+        current_hash = compute_state_hash(payload)
+        loaded_hash = st.session_state.get("loaded_analysis_hash")
+        if loaded_hash and current_hash != loaded_hash:
+            st.warning("Unsaved changes")
+        if st.button("Save New Analysis", key="save_new_analysis"):
+            result = save_analysis(payload, overwrite=False)
+            if result.get("success"):
+                st.session_state["loaded_analysis_id"] = result.get("analysis_id")
+                st.session_state["loaded_analysis_name"] = analysis_name
+                st.session_state["loaded_analysis_hash"] = compute_state_hash(payload)
+                st.success(f"Saved successfully: {result.get('analysis_id')}")
+            else:
+                st.error(result.get("message"))
+        loaded_id = st.session_state.get("loaded_analysis_id")
+        confirm_update = st.checkbox("Confirm update existing analysis", value=False, key="confirm_update_analysis")
+        if st.button("Update Current Analysis", key="update_current_analysis", disabled=not loaded_id or not confirm_update):
+            payload["analysis_id"] = loaded_id
+            result = update_analysis(loaded_id, payload)
+            st.success("Updated successfully." if result.get("success") else result.get("message"))
+
+        show_all = st.checkbox("Show all tickers", value=False, key="show_all_saved_analyses")
+        saved = list_saved_analyses(None if show_all else ticker)
+        selected = st.selectbox(
+            "Load saved analysis",
+            options=saved,
+            format_func=lambda item: f"{item.get('analysis_name')} | {item.get('updated_at')} | {item.get('final_rating')}",
+            key="selected_saved_analysis",
+        ) if saved else None
+        use_saved_market = st.checkbox("View saved market snapshot instead of only latest", value=False, key="use_saved_market_snapshot")
+        if selected and st.button("Load Analysis", key="load_saved_analysis"):
+            try:
+                loaded = load_analysis(selected["analysis_id"])
+                restore_analysis_to_session_state(loaded, use_saved_market_snapshot=use_saved_market)
+                st.success("Loaded successfully.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Load failed: {exc}")
+        if selected:
+            if st.button("Duplicate", key="duplicate_analysis"):
+                result = duplicate_analysis(selected["analysis_id"], f"{selected.get('analysis_name')} Copy")
+                st.success("Duplicated successfully." if result.get("success") else result.get("message"))
+            confirm_delete = st.checkbox("Confirm delete selected analysis", value=False, key="confirm_delete_analysis")
+            if st.button("Delete", key="delete_analysis", disabled=not confirm_delete):
+                result = delete_analysis(selected["analysis_id"])
+                st.success("Deleted successfully." if result.get("success") else result.get("message"))
+                st.rerun()
+            st.download_button(
+                "Export Analysis JSON",
+                data=export_analysis_json(selected["analysis_id"]),
+                file_name=f"{selected['analysis_id']}.json",
+                mime="application/json",
+                key="export_analysis_json",
+            )
+        uploaded = st.file_uploader("Import Analysis JSON", type=["json"], key="import_analysis_json")
+        if uploaded is not None and st.button("Import Analysis", key="import_analysis_button"):
+            result = import_analysis_json(uploaded)
+            st.success("Imported successfully." if result.get("success") else result.get("message"))
+
+        if len(saved) >= 2:
+            st.markdown("**Compare Saved Analyses**")
+            version_a = st.selectbox("Version A", saved, format_func=lambda item: item.get("analysis_name"), key="compare_version_a")
+            version_b = st.selectbox("Version B", saved, format_func=lambda item: item.get("analysis_name"), key="compare_version_b")
+            if st.button("Show Differences", key="compare_analyses"):
+                diff = compare_analyses(load_analysis(version_a["analysis_id"]), load_analysis(version_b["analysis_id"]))
+                show_table(pd.DataFrame(diff.get("differences", [])), "No differences available.")
+
+
 def _overview(ctx: dict) -> None:
     dataset = ctx["dataset"]
     market = dataset.get("market_data", {})
@@ -3233,6 +3518,7 @@ def _pa11r_snapshot(ctx: dict) -> None:
             {"title": "Data Confidence", "value": confidence, "subtitle": confidence_subtitle, "status": confidence_status},
         ]
     )
+    render_status_grid(_analysis_state_cards(ctx))
     render_section(
         "Valuation Method Reconciliation",
         "DCF, SOTP, and multiples are separate lenses. The snapshot only accepts the valuation read when they can be reconciled.",
@@ -3442,6 +3728,15 @@ def _sources_data_quality_tab(ctx: dict, analyst_details: bool) -> None:
         ]
     )
     show_table(_manual_review_plan_table(ctx), "No manual-review plan available.")
+    with st.expander("Saved Analysis Metadata", expanded=bool(st.session_state.get("loaded_analysis_id"))):
+        if st.session_state.get("loaded_analysis_id"):
+            show_table(_saved_analysis_metadata_table(ctx), "No saved-analysis metadata available.")
+            saved_market = st.session_state.get("loaded_market_snapshot")
+            if saved_market:
+                st.caption("Saved market snapshot is shown for comparison only. Latest market data remains the default calculation source.")
+                st.json(saved_market)
+        else:
+            st.info("No saved analysis is currently loaded.")
     with st.expander("Data Coverage Table", expanded=analyst_details):
         show_table(_data_coverage(ctx["dataset"], ctx["historicals"]), "Data coverage unavailable.")
         show_table(_data_quality_table(ctx), "No data-quality notes.")
@@ -3556,11 +3851,12 @@ def render_dashboard():
     st.set_page_config(page_title="PA-11R Hybrid", layout="wide")
     _css()
     apply_design_system()
+    st.session_state.setdefault("research_ticker", "AAPL")
 
     with st.sidebar:
         st.header("Research Setup")
         dashboard_mode = st.radio("Dashboard", ["PA-11R Hybrid", "MR-1 Lite"], horizontal=False)
-        ticker = st.text_input("Ticker", value="AAPL").upper().strip()
+        ticker = st.text_input("Ticker", key="research_ticker").upper().strip()
         peer_override = st.text_input("Peer override", value="", help="Comma-separated tickers")
         fetch_peers = st.toggle("Fetch peers", value=True)
         analyst_details = st.toggle("Show analyst details", value=False)
@@ -3587,6 +3883,8 @@ def render_dashboard():
     spinner_text = "Loading SEC filing evidence..." if include_deep_sec else "Building fast research snapshot..."
     with st.spinner(spinner_text):
         ctx = _build_context(ticker, peer_override, fetch_peers, include_deep_sec=include_deep_sec)
+
+    _render_saved_analysis_sidebar(ctx)
 
     st.caption("Mode: SEC evidence loaded" if include_deep_sec else "Mode: fast SEC JSON snapshot")
     if dashboard_mode == "MR-1 Lite":

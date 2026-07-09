@@ -13,3 +13,4 @@ pytest-cache-files-*/
 *.db
 *.db-journal
 .chrome-*/
+saved_analyses/
