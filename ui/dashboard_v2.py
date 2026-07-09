@@ -538,6 +538,32 @@ def _top_three_risks(ctx: dict) -> list[str]:
     return (combined or ["Manual review required where data is unavailable."])[:3]
 
 
+def _risk_review_table(ctx: dict, limit: int = 4) -> pd.DataFrame:
+    risk_rows = ctx.get("risks", {}).get("risk_rows", []) or []
+    rows = []
+    if risk_rows:
+        for row in risk_rows[:limit]:
+            rows.append(
+                {
+                    "Risk": row.get("risk"),
+                    "Why it matters": row.get("explanation"),
+                    "Model impact": row.get("model_line"),
+                    "Review action": row.get("review_action"),
+                }
+            )
+    else:
+        for risk in _top_three_risks(ctx)[:limit]:
+            rows.append(
+                {
+                    "Risk": risk,
+                    "Why it matters": "Manual review required; the dashboard did not extract a clean risk explanation.",
+                    "Model impact": "Scenario probability / WACC / margin of safety",
+                    "Review action": "Review source filing language before sizing.",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _clean_classification(value) -> str:
     text = str(value or "").strip()
     if not text or text.lower() in {"none", "nan", "inf", "-inf"}:
@@ -708,6 +734,12 @@ def _decision_summary(ctx: dict) -> dict:
     valuation_view, valuation_subtitle, _ = _valuation_view(ctx)
     swing_view, swing_subtitle, _ = _swing_view(ctx)
     confidence, confidence_subtitle, _ = _data_confidence(ctx)
+    risk_rows = _risk_review_table(ctx, limit=3)
+    contradicting = [
+        f"{row.get('Risk')}: {row.get('Why it matters')}"
+        for row in risk_rows.to_dict("records")
+        if row.get("Risk")
+    ]
     return {
         "what_matters": [
             f"Investment view is {ctx['scoring'].get('recommendation') or 'Unknown'} while valuation reads {valuation_view}.",
@@ -715,7 +747,7 @@ def _decision_summary(ctx: dict) -> dict:
             ctx.get("reverse", {}).get("interpretation") or "Reverse DCF benchmark unavailable.",
         ],
         "supporting": _top_three_drivers(ctx)[:2],
-        "contradicting": _top_three_risks(ctx)[:3],
+        "contradicting": contradicting or _top_three_risks(ctx)[:3],
         "manual_review": [row.get("Data Needed") for row in _manual_review_items(ctx)] or [confidence_subtitle],
         "next_action": "Use a starter/watchlist posture until valuation, moat evidence, and manual-review items support higher conviction.",
     }
@@ -2427,6 +2459,19 @@ def _ma_management_sbc(ctx: dict) -> None:
         st.subheader("SBC / Dilution")
         show_table(alignment.get("sbc_table"), "No SBC table available.")
         st.plotly_chart(sbc_vs_buybacks_chart(alignment), width="stretch", key="v2_sbc_management")
+        st.subheader("Capital Allocation Review")
+        show_table(
+            pd.DataFrame(
+                [
+                    {"Review Area": "SBC dilution", "Question": "Is SBC creating material per-share dilution?", "Model Impact": "Diluted shares / fair value per share"},
+                    {"Review Area": "Buybacks", "Question": "Are repurchases offsetting dilution or merely masking it?", "Model Impact": "Share count trend / owner earnings"},
+                    {"Review Area": "Compensation alignment", "Question": "Does pay link to FCF, ROIC, or per-share value?", "Model Impact": "Confidence / margin of safety"},
+                    {"Review Area": "Governance", "Question": "Are board independence and controls sufficient?", "Model Impact": "WACC / position sizing"},
+                    {"Review Area": "M&A discipline", "Question": "Does capital allocation improve organic economics?", "Model Impact": "Revenue quality / terminal multiple"},
+                ]
+            ),
+            "Capital allocation review unavailable.",
+        )
     with c2:
         st.subheader("M&A")
         st.write(ma.get("summary") or "M&A read unavailable.")
@@ -2459,31 +2504,16 @@ def _moat_risks(ctx: dict) -> None:
     risks = ctx["risks"]
     metric_row(
         [
-            ("Moat Score", moat.get("moat_score"), "score"),
+            ("Moat Score", f"{fmt_ratio(moat.get('moat_score'), 1)}/10", "text"),
             ("Moat Class", moat.get("classification"), "text"),
             ("Moat Confidence", moat.get("confidence"), "text"),
-            ("Risk Score", risks.get("risk_score"), "score"),
+            ("Risk Score", f"{fmt_ratio(risks.get('risk_score'), 1)}/10", "text"),
         ]
     )
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(moat_score_bar(moat.get("moat_sources")), width="stretch", key="v2_moat_risks_bar")
         st.write(moat.get("terminal_value_implication") or "Moat implication unavailable.")
-        st.subheader("Moat Scorecard")
-        scorecard = moat.get("moat_sources")
-        if scorecard is not None and not scorecard.empty:
-            show_table(
-                scorecard.rename(
-                    columns={
-                        "moat_source": "Moat Source",
-                        "score_1_to_10": "Score",
-                        "evidence": "Evidence",
-                        "confidence": "Confidence",
-                        "model_implication": "Model Impact",
-                    }
-                )[["Moat Source", "Score", "Evidence", "Confidence", "Model Impact"]],
-                "Moat scorecard unavailable.",
-            )
     with c2:
         entrant = moat.get("new_entrant_test", {})
         st.subheader("New Entrant Test")
@@ -2499,8 +2529,25 @@ def _moat_risks(ctx: dict) -> None:
             ),
             "New entrant test unavailable.",
         )
-        _mini_list("Top risks", risks.get("top_risks", []) or ["No extracted risks available."])
+        st.subheader("Top Risks Explained")
+        show_table(_risk_review_table(ctx, limit=4), "No extracted risks available.")
         st.write("Bear case:", risks.get("bear_case_implications") or UNAVAILABLE)
+
+    st.subheader("Moat Scorecard")
+    scorecard = moat.get("moat_sources")
+    if scorecard is not None and not scorecard.empty:
+        show_table(
+            scorecard.rename(
+                columns={
+                    "moat_source": "Moat Source",
+                    "score_1_to_10": "Score (1-10)",
+                    "evidence": "Evidence",
+                    "confidence": "Confidence",
+                    "model_implication": "Model Impact",
+                }
+            )[["Moat Source", "Score (1-10)", "Evidence", "Confidence", "Model Impact"]],
+            "Moat scorecard unavailable.",
+        )
 
     st.subheader("Thesis Breakers")
     assumptions = ctx.get("base_assumptions", {})
@@ -2624,8 +2671,7 @@ def _peers_risks(ctx: dict) -> None:
     c3, c4 = st.columns(2)
     with c3:
         st.markdown("Top risks")
-        for risk in risks.get("top_risks", []):
-            st.write("-", risk)
+        show_table(_risk_review_table(ctx, limit=5), "No extracted risks available.")
     with c4:
         st.markdown("Thesis breakers")
         for breaker in risks.get("thesis_breakers", []):
@@ -2799,7 +2845,7 @@ def _clause_annotation_map(ctx: dict) -> None:
             st.json(debug)
 
 
-def _data_lab(ctx: dict) -> None:
+def _data_lab(ctx: dict, key_prefix: str = "data_lab") -> None:
     dataset = ctx["dataset"]
     historicals = ctx["historicals"]
     market = dataset.get("market_data", {})
@@ -2820,7 +2866,7 @@ def _data_lab(ctx: dict) -> None:
     sotp = run_sotp(manual_segments, {"default_margin": ctx["base_assumptions"].get("nopat_margin", 0.12), "default_multiple": ctx["base_assumptions"].get("terminal_multiple", 15.0)})
     metric_row([("SOTP EV", sotp.get("enterprise_value"), "money"), ("Net Debt", historicals["Net Debt"].iloc[-1] if not historicals.empty else None, "money")])
     show_table(sotp.get("segment_table"), "No SOTP table available.")
-    st.plotly_chart(scenario_valuation_bar(ctx["base_dcf"]), width="stretch", key="v2_scenario")
+    st.plotly_chart(scenario_valuation_bar(ctx["base_dcf"]), width="stretch", key=f"{key_prefix}_v2_scenario")
 
     with st.expander("Raw provider snapshot"):
         st.json(
@@ -2895,8 +2941,7 @@ def _pa11r_snapshot(ctx: dict) -> None:
 
     render_decision_summary(_decision_summary(ctx))
     with st.expander("Top 4 risks and manual-review plan", expanded=False):
-        risk_rows = [{"Risk": risk, "Risk Type": "Business / Valuation / Data Quality", "Action": "Review before sizing"} for risk in _top_three_risks(ctx)[:4]]
-        show_table(pd.DataFrame(risk_rows), "No top risks available.")
+        show_table(_risk_review_table(ctx, limit=4), "No top risks available.")
         show_table(_manual_review_plan_table(ctx), "No manual-review plan available.")
     with st.expander("Market / Fundamentals Summary", expanded=False):
         show_table(_finviz_decision_snapshot(market), "No market summary available.")
@@ -3094,7 +3139,7 @@ def _sources_data_quality_tab(ctx: dict, analyst_details: bool) -> None:
     with st.expander("Financial Reports", expanded=False):
         _financial_reports(ctx)
     if analyst_details:
-        _data_lab(ctx)
+        _data_lab(ctx, key_prefix="sources")
 
 
 def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
@@ -3235,4 +3280,4 @@ def render_dashboard():
         _render_pa11r_hybrid(ctx, analyst_details or debug)
     if debug:
         with st.expander("Debug Data Lab", expanded=False):
-            _data_lab(ctx)
+            _data_lab(ctx, key_prefix="debug")

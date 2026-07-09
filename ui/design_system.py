@@ -413,6 +413,19 @@ def apply_design_system() -> None:
         div[data-testid="stMetric"] label,
         div[data-testid="stMetricLabel"],
         div[data-testid="stMetricDelta"] { color: #CBD5E1 !important; }
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] > div {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            overflow-wrap: anywhere !important;
+            line-height: 1.08 !important;
+            font-size: clamp(1.35rem, 2.1vw, 2.05rem) !important;
+        }
+        div[data-testid="stMetric"] {
+            min-height: 6.5rem !important;
+            overflow: visible !important;
+        }
         div[data-testid="stDataFrame"] {
             border: 1px solid rgba(148, 163, 184, 0.24);
             border-radius: 8px;

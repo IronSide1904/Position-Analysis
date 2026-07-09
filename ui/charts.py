@@ -128,8 +128,19 @@ def financial_profitability_chart(historicals: pd.DataFrame):
 def moat_score_bar(moat_sources: pd.DataFrame):
     if moat_sources is None or moat_sources.empty:
         return empty_chart("Moat score data unavailable.")
-    fig = px.bar(moat_sources, x="moat_source", y="score_1_to_10", title="Moat Source Scores")
-    fig.update_layout(xaxis_tickangle=-35, margin=dict(l=10, r=10, t=40, b=80), height=380)
+    frame = moat_sources.copy()
+    frame["Moat Source"] = frame["moat_source"].astype(str).str.replace(" / ", " /<br>", regex=False)
+    frame["Score (1-10)"] = frame["score_1_to_10"]
+    fig = px.bar(
+        frame,
+        x="Moat Source",
+        y="Score (1-10)",
+        title="Moat Source Scores",
+        hover_data=["evidence", "confidence"] if {"evidence", "confidence"}.issubset(frame.columns) else None,
+    )
+    fig.update_yaxes(title="Score (1-10)", range=[0, 10], dtick=2)
+    fig.update_xaxes(title="Moat Source", tickangle=-25, automargin=True)
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=140), height=560)
     return fig
 
 
