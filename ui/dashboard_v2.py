@@ -2905,7 +2905,7 @@ def _pa11r_snapshot(ctx: dict) -> None:
         render_copy_summary(_tearsheet_summary(ctx))
 
 
-def _assumption_update_log_editor(ctx: dict) -> None:
+def _assumption_update_log_editor(ctx: dict, key_prefix: str = "evidence") -> None:
     log = st.session_state.setdefault("assumption_update_log", [])
     if not log:
         log.extend(
@@ -2925,11 +2925,17 @@ def _assumption_update_log_editor(ctx: dict) -> None:
                 }
             ]
         )
-    edited = st.data_editor(pd.DataFrame(log), width="stretch", hide_index=True, num_rows="dynamic", key="assumption_update_editor")
+    edited = st.data_editor(
+        pd.DataFrame(log),
+        width="stretch",
+        hide_index=True,
+        num_rows="dynamic",
+        key=f"{key_prefix}_assumption_update_editor",
+    )
     st.session_state["assumption_update_log"] = edited.to_dict("records")
 
 
-def _assumption_workbench(ctx: dict) -> None:
+def _assumption_workbench(ctx: dict, key_prefix: str = "evidence") -> None:
     render_section(
         "Assumption Workbench",
         "Map clauses, news, events, or manual evidence into DCF cases. Applied changes are tracked in an editable log before they affect the model.",
@@ -2943,15 +2949,27 @@ def _assumption_workbench(ctx: dict) -> None:
         show_table(clauses[compact_cols].head(8), "No clause evidence available.")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        apply_case = st.selectbox("Apply to case", ["Base Case", "Bull Case", "Bear Case", "User Case"], key="workbench_case")
+        apply_case = st.selectbox(
+            "Apply to case",
+            ["Base Case", "Bull Case", "Bear Case", "User Case"],
+            key=f"{key_prefix}_workbench_case",
+        )
     with c2:
-        model_line = st.selectbox("Model line", ["revenue_cagr", "nopat_margin", "ocf_margin", "maintenance_capex_pct_revenue", "growth_capex_pct_revenue", "wacc", "terminal_multiple"], key="workbench_line")
+        model_line = st.selectbox(
+            "Model line",
+            ["revenue_cagr", "nopat_margin", "ocf_margin", "maintenance_capex_pct_revenue", "growth_capex_pct_revenue", "wacc", "terminal_multiple"],
+            key=f"{key_prefix}_workbench_line",
+        )
     with c3:
-        new_value = st.text_input("New value", value="", key="workbench_value")
+        new_value = st.text_input("New value", value="", key=f"{key_prefix}_workbench_value")
     with c4:
-        confidence = st.selectbox("Confidence", ["Manual Review", "Low", "Medium", "High"], key="workbench_confidence")
-    note = st.text_area("User note / evidence summary", value="", key="workbench_note", height=90)
-    if st.button("Add assumption update"):
+        confidence = st.selectbox(
+            "Confidence",
+            ["Manual Review", "Low", "Medium", "High"],
+            key=f"{key_prefix}_workbench_confidence",
+        )
+    note = st.text_area("User note / evidence summary", value="", key=f"{key_prefix}_workbench_note", height=90)
+    if st.button("Add assumption update", key=f"{key_prefix}_add_assumption_update"):
         st.session_state.setdefault("assumption_update_log", []).append(
             {
                 "timestamp": pd.Timestamp.utcnow().isoformat(),
@@ -2968,7 +2986,7 @@ def _assumption_workbench(ctx: dict) -> None:
             }
         )
         st.success("Assumption update added to the editable log.")
-    _assumption_update_log_editor(ctx)
+    _assumption_update_log_editor(ctx, key_prefix=key_prefix)
 
 
 def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
@@ -3009,7 +3027,7 @@ def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
     _valuation(ctx)
     if analyst_details:
         with st.expander("Assumption Workbench / Update Log", expanded=True):
-            _assumption_workbench(ctx)
+            _assumption_workbench(ctx, key_prefix="valuation")
 
 
 def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
@@ -3018,7 +3036,7 @@ def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
         "Use this tab to connect filing clauses and manual evidence to DCF assumptions. Tables stay behind expanders unless analyst details are enabled.",
         "Evidence",
     )
-    _assumption_workbench(ctx)
+    _assumption_workbench(ctx, key_prefix="evidence")
     with st.expander("Clause / News / Event Map", expanded=analyst_details):
         _clause_annotation_map(ctx)
     with st.expander("Filing Metadata and Guidance", expanded=analyst_details):
