@@ -8,13 +8,11 @@ def test_pa11r_cockpit_tabs_render():
     assert len(app.exception) == 0
     expected = [
         "Snapshot",
-        "Valuation",
-        "SOTP",
-        "Multiples & Peers",
+        "Valuation & DCF",
+        "Financials & Reinvestment",
         "Evidence & Assumptions",
-        "Business Quality",
-        "Management & Capital Allocation",
-        "Sources & Data Quality",
+        "Business Quality & Risks",
+        "Sources & Review",
     ]
     labels = [tab.label for tab in app.tabs]
     assert all(label in labels for label in expected)

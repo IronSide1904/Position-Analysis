@@ -842,6 +842,80 @@ def _top_clause_impacts(clauses: pd.DataFrame) -> pd.DataFrame:
     return frame.rename(columns=rename)
 
 
+def _capex_view(ctx: dict) -> dict:
+    assumptions = _normalize_assumption_bridge(ctx.get("base_assumptions", {}))
+    maintenance = assumptions.get("maintenance_capex_pct_revenue")
+    growth = assumptions.get("growth_capex_pct_revenue")
+    total = assumptions.get("total_capex_pct_revenue")
+    use_da = bool(assumptions.get("use_da_as_maintenance_capex_proxy"))
+    capex = (ctx.get("accounting_interpretation") or {}).get("capex", {})
+    if total is None:
+        view = "Unclear"
+    elif (growth or 0) > (maintenance or 0) * 1.25:
+        view = "Growth-heavy"
+    elif (maintenance or 0) > (growth or 0) * 1.25:
+        view = "Maintenance-heavy"
+    else:
+        view = "Mixed"
+    evidence_grade = "Proxy-based" if use_da else capex.get("confidence") or "Calculated"
+    if capex.get("classification") and evidence_grade != "Proxy-based":
+        evidence_grade = f"{evidence_grade} / clause-adjusted"
+    dcf_impact = "Near-term FCF pressure" if (growth or 0) >= 0.03 else "Normal reinvestment drag"
+    if use_da:
+        dcf_impact = f"{dcf_impact}; maintenance CAPEX uses D&A proxy"
+    return {
+        "view": view,
+        "maintenance": maintenance,
+        "growth": growth,
+        "total": total,
+        "evidence_grade": evidence_grade,
+        "method": "D&A proxy + explicit growth CAPEX" if use_da else "Explicit maintenance + growth CAPEX",
+        "dcf_impact": dcf_impact,
+    }
+
+
+def _capex_snapshot_table(ctx: dict) -> pd.DataFrame:
+    capex = _capex_view(ctx)
+    return pd.DataFrame(
+        [
+            {"Metric": "CAPEX View", "Read": capex["view"]},
+            {"Metric": "Maintenance CAPEX", "Read": fmt_percent(capex["maintenance"])},
+            {"Metric": "Growth CAPEX", "Read": fmt_percent(capex["growth"])},
+            {"Metric": "Total CAPEX", "Read": fmt_percent(capex["total"])},
+            {"Metric": "CAPEX Evidence", "Read": capex["evidence_grade"]},
+            {"Metric": "DCF impact", "Read": capex["dcf_impact"]},
+        ]
+    )
+
+
+def _capex_bridge_table(ctx: dict) -> pd.DataFrame:
+    historicals = ctx.get("historicals")
+    assumptions = _normalize_assumption_bridge(ctx.get("base_assumptions", {}))
+    if historicals is None or historicals.empty:
+        return pd.DataFrame()
+    latest = historicals.iloc[-1]
+    revenue = latest.get("Revenue")
+    reported_capex = latest.get("Total CAPEX")
+    da = latest.get("D&A")
+    if da is None and latest.get("EBITDA") is not None and latest.get("EBIT") is not None:
+        da = max(float(latest.get("EBITDA") or 0) - float(latest.get("EBIT") or 0), 0)
+    maintenance = float(revenue or 0) * float(assumptions.get("maintenance_capex_pct_revenue") or 0)
+    growth = max(float(reported_capex or 0) - maintenance, 0)
+    total = float(reported_capex or 0)
+    return pd.DataFrame(
+        [
+            {"Metric": "Reported Total CAPEX", "Value": total, "Source Badge": "Reported", "Interpretation": "Cash flow statement CAPEX."},
+            {"Metric": "D&A", "Value": da, "Source Badge": "Reported / Calculated", "Interpretation": "Potential maintenance CAPEX proxy when no better split is disclosed."},
+            {"Metric": "Estimated Maintenance CAPEX", "Value": maintenance, "Source Badge": "Proxy-based" if assumptions.get("use_da_as_maintenance_capex_proxy") else "Calculated", "Interpretation": "Reinvestment needed to sustain current operations."},
+            {"Metric": "Estimated Growth CAPEX", "Value": growth, "Source Badge": "Calculated", "Interpretation": "Reported CAPEX above estimated maintenance CAPEX."},
+            {"Metric": "Growth CAPEX % Total CAPEX", "Value": growth / total if total else None, "Source Badge": "Calculated", "Interpretation": "Higher means near-term FCF is being used for expansion."},
+            {"Metric": "CAPEX / Revenue", "Value": total / revenue if revenue else None, "Source Badge": "Calculated", "Interpretation": "Reinvestment intensity versus sales base."},
+            {"Metric": "D&A / Revenue", "Value": da / revenue if revenue and da is not None else None, "Source Badge": "Calculated", "Interpretation": "D&A intensity versus sales base."},
+            {"Metric": "CAPEX vs D&A ratio", "Value": total / da if da else None, "Source Badge": "Calculated", "Interpretation": "Above 1.0x can indicate growth investment, inflation, or under-depreciated assets."},
+        ]
+    )
+
+
 def _clip_text(text: object, max_chars: int = 360) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
     if not clean or clean == UNAVAILABLE:
@@ -944,6 +1018,10 @@ def _assumption_evidence_table(assumptions: dict) -> pd.DataFrame:
         "ocf_margin",
         "maintenance_capex_pct_revenue",
         "growth_capex_pct_revenue",
+        "total_capex_pct_revenue",
+        "depreciation_amortization_pct_revenue",
+        "use_da_as_maintenance_capex_proxy",
+        "capex_fade_year",
         "working_capital_pct_revenue",
         "sbc_pct_revenue",
         "diluted_share_growth",
@@ -1138,21 +1216,37 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict) -> pd.DataFr
     forecast = dcf_output.get("forecast_table", pd.DataFrame())
     if forecast is None or forecast.empty:
         return pd.DataFrame()
-    rows = [
-        {"Metric": "Revenue"},
-        {"Metric": "Revenue Growth %"},
-        {"Metric": "EBIT Margin %"},
-        {"Metric": "NOPAT"},
-        {"Metric": "OCF"},
-        {"Metric": "Maintenance CAPEX"},
-        {"Metric": "Growth CAPEX"},
-        {"Metric": "FCFF / FCF"},
-        {"Metric": "Discount Factor"},
-        {"Metric": "Discounted FCF"},
-        {"Metric": "Terminal Value"},
-        {"Metric": "Discounted Terminal Value"},
+    metrics = [
+        "Revenue",
+        "Revenue Growth %",
+        "EBIT",
+        "EBIT Margin %",
+        "Tax Rate",
+        "NOPAT",
+        "D&A",
+        "D&A % Revenue",
+        "OCF",
+        "OCF Margin %",
+        "Maintenance CAPEX",
+        "Maintenance CAPEX % Revenue",
+        "Growth CAPEX",
+        "Growth CAPEX % Revenue",
+        "Total CAPEX",
+        "Total CAPEX % Revenue",
+        "Working Capital",
+        "Working Capital % Revenue",
+        "FCF",
+        "FCF Margin %",
+        "FCFF",
+        "Discount Factor",
+        "Discounted FCF / FCFF",
+        "Terminal Value",
+        "Discounted Terminal Value",
     ]
+    rows = [{"Metric": metric} for metric in metrics]
+    row_by_metric = {row["Metric"]: row for row in rows}
     prior_revenue = None
+    tax_rate = float(assumptions.get("tax_rate", 0.21) or 0.21)
     for _, row in forecast.iterrows():
         year = int(row.get("Year") or 0)
         suffix = "E" if year == 1 else "F"
@@ -1161,28 +1255,51 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict) -> pd.DataFr
         revenue_growth = (revenue / prior_revenue - 1) if prior_revenue else assumptions.get("revenue_cagr")
         prior_revenue = revenue
         discount_factor = 1 / ((1 + float(assumptions.get("wacc", 0.095))) ** year)
-        rows[0][column] = revenue
-        rows[1][column] = revenue_growth
-        rows[2][column] = assumptions.get("operating_margin")
-        rows[3][column] = row.get("NOPAT")
-        rows[4][column] = row.get("OCF")
-        rows[5][column] = row.get("Maintenance CAPEX")
-        rows[6][column] = row.get("Growth CAPEX")
-        rows[7][column] = row.get("FCF")
-        rows[8][column] = discount_factor
-        rows[9][column] = row.get("PV FCF")
-    rows[10]["Terminal"] = dcf_output.get("terminal_value")
-    rows[11]["Terminal"] = dcf_output.get("discounted_terminal_value")
+        nopat = row.get("NOPAT")
+        ebit = nopat / max(1 - tax_rate, 0.01) if nopat is not None else None
+        da = row.get("D&A")
+        ocf = row.get("OCF")
+        maintenance_capex = row.get("Maintenance CAPEX")
+        growth_capex = row.get("Growth CAPEX")
+        total_capex = row.get("Total CAPEX", row.get("CAPEX"))
+        working_capital = row.get("Working Capital Investment")
+        fcf = row.get("FCF")
+        fcff = row.get("FCFF")
+        row_by_metric["Revenue"][column] = revenue
+        row_by_metric["Revenue Growth %"][column] = revenue_growth
+        row_by_metric["EBIT"][column] = ebit
+        row_by_metric["EBIT Margin %"][column] = ebit / revenue if revenue else None
+        row_by_metric["Tax Rate"][column] = tax_rate
+        row_by_metric["NOPAT"][column] = nopat
+        row_by_metric["D&A"][column] = da
+        row_by_metric["D&A % Revenue"][column] = da / revenue if revenue else None
+        row_by_metric["OCF"][column] = ocf
+        row_by_metric["OCF Margin %"][column] = ocf / revenue if revenue else None
+        row_by_metric["Maintenance CAPEX"][column] = maintenance_capex
+        row_by_metric["Maintenance CAPEX % Revenue"][column] = maintenance_capex / revenue if revenue else None
+        row_by_metric["Growth CAPEX"][column] = growth_capex
+        row_by_metric["Growth CAPEX % Revenue"][column] = growth_capex / revenue if revenue else None
+        row_by_metric["Total CAPEX"][column] = total_capex
+        row_by_metric["Total CAPEX % Revenue"][column] = total_capex / revenue if revenue else None
+        row_by_metric["Working Capital"][column] = working_capital
+        row_by_metric["Working Capital % Revenue"][column] = working_capital / revenue if revenue else None
+        row_by_metric["FCF"][column] = fcf
+        row_by_metric["FCF Margin %"][column] = fcf / revenue if revenue else None
+        row_by_metric["FCFF"][column] = fcff
+        row_by_metric["Discount Factor"][column] = discount_factor
+        row_by_metric["Discounted FCF / FCFF"][column] = row.get("PV FCF")
+    row_by_metric["Terminal Value"]["Terminal"] = dcf_output.get("terminal_value")
+    row_by_metric["Discounted Terminal Value"]["Terminal"] = dcf_output.get("discounted_terminal_value")
     return pd.DataFrame(rows)
 
 
 ASSUMPTION_GROUPS = {
     "Growth": "These assumptions determine the size of the forecast revenue base.",
-    "Margins & OPEX": "These assumptions determine how much revenue converts into operating profit and NOPAT.",
+    "Margins": "These assumptions determine how much revenue converts into operating profit and NOPAT.",
     "Cash Conversion": "These assumptions determine whether accounting profit converts into operating cash flow.",
-    "Reinvestment": "These assumptions determine how much cash must be reinvested before owners get FCF.",
-    "Terminal Value": "These assumptions drive the discount rate and the value after the explicit forecast period.",
+    "Reinvestment / CAPEX": "These assumptions determine how much cash must be reinvested before owners get FCF.",
     "Dilution": "These assumptions determine how enterprise value converts into per-share value.",
+    "Terminal Value": "These assumptions drive the discount rate and the value after the explicit forecast period.",
 }
 
 
@@ -1220,7 +1337,7 @@ ASSUMPTION_METADATA = {
     "gross_margin": {
         "label": "Gross Margin",
         "unit": "percent",
-        "group": "Margins & OPEX",
+        "group": "Margins",
         "description": "Gross profit as a percentage of revenue.",
         "model_line": "Gross Profit",
         "affects": ["Gross Profit", "EBIT", "NOPAT", "FCF"],
@@ -1235,7 +1352,7 @@ ASSUMPTION_METADATA = {
     "opex_pct_revenue": {
         "label": "OPEX % Revenue",
         "unit": "percent",
-        "group": "Margins & OPEX",
+        "group": "Margins",
         "description": "Operating expenses as a percentage of revenue. Lower OPEX % usually means better operating leverage.",
         "model_line": "OPEX",
         "affects": ["EBIT", "NOPAT", "FCF", "Operating Leverage"],
@@ -1250,7 +1367,7 @@ ASSUMPTION_METADATA = {
     "tax_rate": {
         "label": "Tax Rate",
         "unit": "percent",
-        "group": "Margins & OPEX",
+        "group": "Margins",
         "description": "Cash tax rate applied to operating profit in the NOPAT bridge.",
         "model_line": "NOPAT",
         "affects": ["NOPAT", "FCF", "Fair Value"],
@@ -1265,7 +1382,7 @@ ASSUMPTION_METADATA = {
     "nopat_margin": {
         "label": "Direct NOPAT Margin",
         "unit": "percent",
-        "group": "Margins & OPEX",
+        "group": "Margins",
         "description": "Direct override for normalized after-tax operating profit as a percentage of revenue.",
         "model_line": "NOPAT",
         "affects": ["NOPAT", "FCF", "Fair Value"],
@@ -1295,7 +1412,7 @@ ASSUMPTION_METADATA = {
     "working_capital_pct_revenue": {
         "label": "Working Capital % Revenue",
         "unit": "percent",
-        "group": "Cash Conversion",
+        "group": "Reinvestment / CAPEX",
         "description": "Cash tied up or released through receivables, inventory, payables, deferred revenue, and contract assets.",
         "model_line": "Working Capital",
         "affects": ["OCF", "FCF"],
@@ -1310,13 +1427,13 @@ ASSUMPTION_METADATA = {
     "maintenance_capex_pct_revenue": {
         "label": "Maintenance CAPEX % Revenue",
         "unit": "percent",
-        "group": "Reinvestment",
-        "description": "CAPEX required to maintain current operations.",
+        "group": "Reinvestment / CAPEX",
+        "description": "Capital expenditure required to maintain current operations.",
         "model_line": "Maintenance CAPEX",
-        "affects": ["FCF", "Normalized Cash Earnings"],
+        "affects": ["Normalized Cash Earnings", "FCFF", "FCF", "Fair Value"],
         "default_source": "Company disclosure or D&A proxy if undisclosed.",
-        "reasonable_range": "Asset-light software may be low; manufacturing/industrial businesses may be much higher.",
-        "warning": "If undisclosed, a D&A proxy may be wrong. Review asset intensity, industry, and CAPEX notes.",
+        "reasonable_range": "Asset-light software may be low; asset-heavy industrial or infrastructure businesses may be much higher.",
+        "warning": "D&A is only a proxy. It may be misleading for software, acquisition-heavy, data-center, infrastructure, or high-growth capacity-expansion companies.",
         "min": 0.0,
         "max": 0.25,
         "step": 0.005,
@@ -1325,17 +1442,72 @@ ASSUMPTION_METADATA = {
     "growth_capex_pct_revenue": {
         "label": "Growth CAPEX % Revenue",
         "unit": "percent",
-        "group": "Reinvestment",
-        "description": "Reinvestment intended to create future capacity, revenue, or efficiency.",
+        "group": "Reinvestment / CAPEX",
+        "description": "Capital expenditure intended to create future revenue, capacity, automation, or efficiency.",
         "model_line": "Growth CAPEX",
-        "affects": ["FCF", "Future Revenue", "Margins"],
-        "default_source": "CAPEX notes, capacity expansion, backlog, new facilities, or technology investment.",
-        "reasonable_range": "Can be temporarily elevated during expansion cycles.",
-        "warning": "Growth CAPEX may reduce near-term FCF but improve future revenue or margins if execution succeeds.",
+        "affects": ["Near-term FCF", "Future Revenue", "Future Margin", "Fair Value"],
+        "default_source": "Total CAPEX minus maintenance CAPEX, adjusted using filing clauses and business logic.",
+        "reasonable_range": "Can be temporarily elevated during investment cycles, capacity expansion, infrastructure build-out, or automation projects.",
+        "warning": "Do not treat all growth CAPEX as recurring maintenance cost, but do not ignore it if growth requires continuous reinvestment.",
         "min": 0.0,
         "max": 0.35,
         "step": 0.005,
         "source": "Estimated",
+    },
+    "total_capex_pct_revenue": {
+        "label": "Total CAPEX % Revenue",
+        "unit": "percent",
+        "group": "Reinvestment / CAPEX",
+        "description": "Total capital expenditures as a percentage of revenue, calculated as maintenance CAPEX plus growth CAPEX.",
+        "model_line": "Total CAPEX",
+        "affects": ["FCF", "Cash Conversion", "Reinvestment Intensity"],
+        "default_source": "Reported cash flow statement CAPEX.",
+        "reasonable_range": "Should be checked against company history and peers.",
+        "warning": "High total CAPEX may reflect either growth investment or maintenance burden. Classify before using in normalized valuation.",
+        "source": "Calculated",
+        "derived": True,
+    },
+    "depreciation_amortization_pct_revenue": {
+        "label": "D&A % Revenue",
+        "unit": "percent",
+        "group": "Reinvestment / CAPEX",
+        "description": "Depreciation and amortization as a percentage of revenue, used in the FCFF bridge and optional maintenance CAPEX proxy.",
+        "model_line": "D&A",
+        "affects": ["FCFF", "Maintenance CAPEX Proxy", "Accounting Quality"],
+        "default_source": "Reported D&A divided by revenue or financial-model estimate.",
+        "reasonable_range": "Compare with asset intensity, accounting policy, and CAPEX history.",
+        "warning": "D&A can understate maintenance needs for growth-heavy companies and overstate them for acquisition-heavy amortization.",
+        "min": 0.0,
+        "max": 0.30,
+        "step": 0.005,
+        "source": "Calculated",
+    },
+    "use_da_as_maintenance_capex_proxy": {
+        "label": "Use D&A as Maintenance CAPEX Proxy",
+        "unit": "bool",
+        "group": "Reinvestment / CAPEX",
+        "description": "When enabled, maintenance CAPEX follows D&A % revenue because no better maintenance-growth CAPEX split is disclosed.",
+        "model_line": "Maintenance CAPEX",
+        "affects": ["Maintenance CAPEX", "Normalized Cash Earnings", "FCFF", "Fair Value"],
+        "default_source": "Enabled when D&A is available and no disclosed CAPEX split is present.",
+        "reasonable_range": "Use only as a transparent proxy; disable if filings disclose maintenance CAPEX or D&A is unreliable.",
+        "warning": "D&A proxy is never silent. It must be reviewed when the company is acquisition-heavy, asset-light, or investing for capacity.",
+        "source": "Proxy-based",
+    },
+    "capex_fade_year": {
+        "label": "CAPEX Normalization Year",
+        "unit": "years",
+        "group": "Reinvestment / CAPEX",
+        "description": "Year when elevated growth CAPEX is expected to normalize.",
+        "model_line": "Growth CAPEX Forecast",
+        "affects": ["FCF Forecast", "Terminal Value"],
+        "default_source": "Scenario assumption based on investment cycle and filing commentary.",
+        "reasonable_range": "Usually 2-5 years depending on project duration and business model.",
+        "warning": "Do not assume CAPEX normalizes without evidence from management commentary, project timing, or historical cycle.",
+        "min": 2,
+        "max": 5,
+        "step": 1,
+        "source": "Scenario-based",
     },
     "wacc": {
         "label": "WACC",
@@ -1461,6 +1633,57 @@ VALUATION_BASIS_OPTIONS = {
 }
 
 
+TAB_CONTENT_MAP = {
+    "Snapshot": [
+        "decision_summary",
+        "valuation_snapshot",
+        "top_drivers",
+        "top_risks",
+        "top_evidence_impacts",
+        "compact_market_summary",
+        "compact_capex_view",
+    ],
+    "Valuation & DCF": [
+        "assumption_workbench",
+        "dcf_output",
+        "ev_to_equity_bridge",
+        "reverse_dcf",
+        "scenario_table",
+        "sensitivity_heatmap",
+        "assumption_log",
+    ],
+    "Financials & Reinvestment": [
+        "historical_financials",
+        "margin_trends",
+        "ocf_quality",
+        "capex_bridge",
+        "da_interpretation",
+        "sbc_dilution",
+    ],
+    "Evidence & Assumptions": [
+        "clause_map",
+        "evidence_to_model_mapping",
+        "guidance_implications",
+        "manual_notes",
+    ],
+    "Business Quality & Risks": [
+        "moat",
+        "operating_leverage",
+        "peer_quality",
+        "management",
+        "mna",
+        "risks",
+        "thesis_breakers",
+    ],
+    "Sources & Review": [
+        "data_coverage",
+        "manual_review_plan",
+        "source_table",
+        "debug_if_enabled",
+    ],
+}
+
+
 def _assumption_float(value, default: float = 0.0) -> float:
     try:
         if value is None or pd.isna(value):
@@ -1491,6 +1714,8 @@ ASSUMPTION_RANGE_DEFAULTS = {
     "working_capital_pct_revenue": {"default": {"min": -0.10, "max": 0.20, "step": 0.005}},
     "maintenance_capex_pct_revenue": {"default": {"min": 0.00, "max": 0.30, "step": 0.0025}},
     "growth_capex_pct_revenue": {"default": {"min": 0.00, "max": 0.50, "step": 0.0025}},
+    "depreciation_amortization_pct_revenue": {"default": {"min": 0.00, "max": 0.30, "step": 0.0025}},
+    "capex_fade_year": {"default": {"min": 2, "max": 5, "step": 1}},
     "wacc": {"default": {"min": 0.06, "max": 0.18, "step": 0.0025}},
     "terminal_growth": {"default": {"min": -0.02, "max": 0.05, "step": 0.001}},
     "terminal_multiple": {"default": {"min": 5.0, "max": 35.0, "step": 0.5}},
@@ -1571,6 +1796,8 @@ def _assumption_unit(key: str) -> str:
 def format_assumption_value(value, unit: str) -> str:
     if value is None:
         return UNAVAILABLE
+    if unit == "bool":
+        return "Yes" if bool(value) else "No"
     if unit == "percent":
         return fmt_percent(value, 1)
     if unit == "multiple":
@@ -1594,6 +1821,8 @@ def format_assumption_value(value, unit: str) -> str:
 def _parse_assumption_value(value, unit: str):
     if value is None:
         return None
+    if unit == "bool":
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         number = float(value)
         return number / 100 if unit == "percent" and abs(number) > 1.5 else number
@@ -1643,6 +1872,16 @@ def _normalize_assumption_bridge(assumptions: dict, direct_nopat_override: bool 
     operating_margin = gross - opex
     normalized["opex_pct_revenue"] = opex
     normalized["operating_margin"] = operating_margin
+    normalized.setdefault("use_da_as_maintenance_capex_proxy", bool(normalized.get("depreciation_amortization_pct_revenue")))
+    if normalized.get("use_da_as_maintenance_capex_proxy"):
+        normalized["maintenance_capex_pct_revenue"] = _assumption_float(
+            normalized.get("depreciation_amortization_pct_revenue"),
+            _assumption_float(normalized.get("maintenance_capex_pct_revenue"), 0.03),
+        )
+    normalized["maintenance_capex_pct_revenue"] = max(_assumption_float(normalized.get("maintenance_capex_pct_revenue")), 0.0)
+    normalized["growth_capex_pct_revenue"] = max(_assumption_float(normalized.get("growth_capex_pct_revenue")), 0.0)
+    normalized["total_capex_pct_revenue"] = normalized["maintenance_capex_pct_revenue"] + normalized["growth_capex_pct_revenue"]
+    normalized["capex_fade_year"] = int(_assumption_float(normalized.get("capex_fade_year"), 3))
     if not direct_nopat_override:
         normalized["nopat_margin"] = operating_margin * (1 - tax_rate)
     return normalized
@@ -1692,6 +1931,10 @@ def _market_implied_assumptions(reverse: dict, base: dict) -> dict:
         "opex_pct_revenue": _derive_opex_pct(base),
         "maintenance_capex_pct_revenue": base.get("maintenance_capex_pct_revenue"),
         "growth_capex_pct_revenue": base.get("growth_capex_pct_revenue"),
+        "total_capex_pct_revenue": base.get("total_capex_pct_revenue"),
+        "depreciation_amortization_pct_revenue": base.get("depreciation_amortization_pct_revenue"),
+        "use_da_as_maintenance_capex_proxy": base.get("use_da_as_maintenance_capex_proxy"),
+        "capex_fade_year": base.get("capex_fade_year"),
         "working_capital_pct_revenue": base.get("working_capital_pct_revenue"),
         "diluted_shares": base.get("diluted_shares"),
     }
@@ -1719,7 +1962,11 @@ def _scenario_comparison_table(scenarios: dict, reverse: dict, user_assumptions:
         "ocf_margin",
         "maintenance_capex_pct_revenue",
         "growth_capex_pct_revenue",
+        "total_capex_pct_revenue",
+        "depreciation_amortization_pct_revenue",
+        "use_da_as_maintenance_capex_proxy",
         "working_capital_pct_revenue",
+        "capex_fade_year",
         "wacc",
         "terminal_growth",
         "terminal_multiple",
@@ -1783,6 +2030,9 @@ def _historical_assumption_value(historicals: pd.DataFrame | None, key: str):
     ratio_column = {
         "maintenance_capex_pct_revenue": "Maintenance CAPEX",
         "growth_capex_pct_revenue": "Growth CAPEX",
+        "total_capex_pct_revenue": "Total CAPEX",
+        "depreciation_amortization_pct_revenue": "D&A",
+        "working_capital_pct_revenue": "Working Capital Investment",
         "sbc_pct_revenue": "SBC",
     }.get(key)
     if ratio_column and ratio_column in historicals:
@@ -2050,9 +2300,14 @@ def render_assumption_slider(
 def _assumption_change_rows(base: dict, edited: dict, scenario_scope: str, historicals: pd.DataFrame, market: dict) -> list[dict]:
     rows = []
     for key in ASSUMPTION_KEYS:
+        if ASSUMPTION_METADATA[key].get("derived"):
+            continue
         old_value = base.get(key)
         new_value = edited.get(key)
-        if abs(_assumption_float(new_value) - _assumption_float(old_value)) <= 0.000001:
+        if ASSUMPTION_METADATA[key].get("unit") == "bool":
+            if bool(new_value) == bool(old_value):
+                continue
+        elif abs(_assumption_float(new_value) - _assumption_float(old_value)) <= 0.000001:
             continue
         meta = ASSUMPTION_METADATA[key]
         impact = calculate_assumption_impact(base, edited, key, historicals, market)
@@ -2182,6 +2437,35 @@ def _assumption_editor(ctx: dict) -> dict:
             st.info("Direct NOPAT Margin is inactive because the OPEX-derived EBIT bridge is active.")
             continue
         meta = ASSUMPTION_METADATA[key]
+        if meta.get("derived"):
+            edited = _normalize_assumption_bridge(edited, direct_nopat_override)
+            st.markdown(
+                f"""
+                <div class="pa-box">
+                    <div class="pa-box-title">{html.escape(meta["label"])}</div>
+                    <strong>Calculated value:</strong> {html.escape(format_assumption_value(edited.get(key), meta["unit"]))}<br/>
+                    <strong>Formula:</strong> Maintenance CAPEX % Revenue + Growth CAPEX % Revenue<br/>
+                    <strong>Why it matters:</strong> {html.escape(meta["description"])}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            continue
+        if meta.get("unit") == "bool":
+            edited[key] = st.checkbox(
+                meta["label"],
+                value=bool(edited.get(key)),
+                help=f"{meta['description']} Warning: {meta['warning']}",
+                key=f"assumption_bool_{scenario_scope}_{key}",
+            )
+            _render_assumption_explanation(
+                key,
+                profile,
+                f"{scenario_scope} only",
+                _assumption_source(key, scenario_scope, edited.get(key), base.get(key)),
+                None,
+            )
+            continue
         fair_value_impact = calculate_assumption_impact(base, edited, key, historicals, market)
         if "min" in meta:
             edited[key] = render_assumption_slider(
@@ -2890,7 +3174,7 @@ def _valuation(ctx: dict) -> None:
             dcf_output_table,
             "DCF Scenario Forecast Table: Selected Line Items",
             line_item_col="Metric",
-            default_items=["Revenue", "NOPAT", "OCF", "Maintenance CAPEX", "Growth CAPEX", "FCFF / FCF"],
+            default_items=["Revenue", "NOPAT", "OCF", "Maintenance CAPEX", "Growth CAPEX", "Total CAPEX", "FCF", "FCFF"],
             key_prefix="valuation_dcf_output",
         )
         show_table(dcf_output_table, "DCF output unavailable.")
@@ -3635,7 +3919,6 @@ def _pa11r_snapshot(ctx: dict) -> None:
         ]
     )
     render_status_grid(_analysis_state_cards(ctx))
-    _company_story_context(ctx)
     render_section(
         "Valuation Method Reconciliation",
         "DCF, SOTP, and multiples are separate lenses. The snapshot only accepts the valuation read when they can be reconciled.",
@@ -3645,18 +3928,19 @@ def _pa11r_snapshot(ctx: dict) -> None:
 
     c1, c2 = st.columns([0.58, 0.42])
     with c1:
-        render_section("Price Action", "Current market context is secondary to the investment view, but it helps with timing and exposure.", "Trading Context")
-        st.plotly_chart(price_action_chart(dataset.get("price_history")), width="stretch", key="pa11r_snapshot_price")
+        render_section("What Matters Most", "Snapshot keeps only the items most likely to change the decision or model.", "Drivers")
+        _mini_list("Top 3 valuation drivers", _top_three_drivers(ctx))
+        _mini_list("Top 3 risks", _top_three_risks(ctx))
+        st.subheader("Top Model-Changing Evidence")
+        show_table(_top_clause_impacts(ctx["clauses"]), "No clause-driven model impacts available yet.")
     with c2:
-        render_section("Accounting Reality Check", "Accounting warnings affect confidence and assumptions, not just score.", "Quality")
+        render_section("Compact Market / Reinvestment Strip", "Market data and CAPEX are summarized here; full detail lives in the dedicated tabs.", "Snapshot")
+        show_table(_finviz_decision_snapshot(market).head(6), "No market summary available.")
+        st.subheader("CAPEX Summary")
+        show_table(_capex_snapshot_table(ctx), "CAPEX summary unavailable.")
         _accounting_reality_compact(ctx)
 
     render_decision_summary(_decision_summary(ctx))
-    with st.expander("Top 4 risks and manual-review plan", expanded=False):
-        show_table(_risk_review_table(ctx, limit=4), "No top risks available.")
-        show_table(_manual_review_plan_table(ctx), "No manual-review plan available.")
-    with st.expander("Market / Fundamentals Summary", expanded=False):
-        show_table(_finviz_decision_snapshot(market), "No market summary available.")
     with st.expander("One-page tear sheet", expanded=False):
         render_tearsheet(_tearsheet_summary(ctx))
         render_copy_summary(_tearsheet_summary(ctx))
@@ -3814,11 +4098,11 @@ def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
     show_table(
         pd.DataFrame(
             [
-                {"Case": "Bear Case", "Revenue CAGR": max((assumptions.get("revenue_cagr") or 0) - 0.03, -0.2), "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": max((assumptions.get("terminal_multiple") or 0) - 2, 0), "Read": "Stress lower growth / multiple"},
-                {"Case": "Base Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": assumptions.get("terminal_multiple"), "Read": "Dashboard base case"},
-                {"Case": "Bull Case", "Revenue CAGR": (assumptions.get("revenue_cagr") or 0) + 0.05, "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": (assumptions.get("terminal_multiple") or 0) + 2, "Read": "Evidence-supported upside case"},
-                {"Case": "User Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "NOPAT Margin": assumptions.get("nopat_margin"), "Terminal Multiple": assumptions.get("terminal_multiple"), "Read": "Editable through assumption controls"},
-                {"Case": "Market-Implied Case", "Revenue CAGR": reverse.get("implied_revenue_cagr"), "NOPAT Margin": reverse.get("implied_nopat_margin"), "Terminal Multiple": reverse.get("implied_terminal_multiple"), "Read": reverse.get("market_case")},
+                {"Case": "Bear Case", "Revenue CAGR": max((assumptions.get("revenue_cagr") or 0) - 0.03, -0.2), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": (assumptions.get("growth_capex_pct_revenue") or 0) + 0.02, "Total CAPEX % Revenue": (assumptions.get("maintenance_capex_pct_revenue") or 0) + (assumptions.get("growth_capex_pct_revenue") or 0) + 0.02, "FCF Margin": None, "Fair Value / Share": None, "Read": "Stress lower growth / higher reinvestment"},
+                {"Case": "Base Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": assumptions.get("growth_capex_pct_revenue"), "Total CAPEX % Revenue": assumptions.get("total_capex_pct_revenue"), "FCF Margin": None, "Fair Value / Share": dcf.get("fair_value_per_share"), "Read": "Dashboard base case"},
+                {"Case": "Bull Case", "Revenue CAGR": (assumptions.get("revenue_cagr") or 0) + 0.05, "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": max((assumptions.get("growth_capex_pct_revenue") or 0) - 0.01, 0), "Total CAPEX % Revenue": (assumptions.get("maintenance_capex_pct_revenue") or 0) + max((assumptions.get("growth_capex_pct_revenue") or 0) - 0.01, 0), "FCF Margin": None, "Fair Value / Share": None, "Read": "Evidence-supported growth with CAPEX normalization"},
+                {"Case": "User Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": assumptions.get("growth_capex_pct_revenue"), "Total CAPEX % Revenue": assumptions.get("total_capex_pct_revenue"), "FCF Margin": None, "Fair Value / Share": dcf.get("fair_value_per_share"), "Read": "Editable through assumption controls"},
+                {"Case": "Market-Implied Case", "Revenue CAGR": reverse.get("implied_revenue_cagr"), "Maintenance CAPEX % Revenue": "Not solved", "Growth CAPEX % Revenue": "Not solved", "Total CAPEX % Revenue": "Not solved", "FCF Margin": "Not solved", "Fair Value / Share": market.get("price"), "Read": "Reverse DCF solves growth/margin, not CAPEX directly"},
             ]
         ),
         "Scenario comparison unavailable.",
@@ -3826,19 +4110,58 @@ def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
     profile = infer_stock_profile(ctx["dataset"])
     st.info(f"Stock-profile assumption group: {profile}. The control panel below uses existing assumptions until profile-specific operating KPIs are available.")
     _valuation(ctx)
+    with st.expander("SOTP Lens", expanded=False):
+        render_sotp_tab(ctx, analyst_details, key_prefix="pa11r_valuation_sotp")
+    with st.expander("Multiples / Peer Lens", expanded=False):
+        render_multiples_tab(ctx, key_prefix="pa11r_valuation_multiples")
     if analyst_details:
         with st.expander("Assumption Workbench / Update Log", expanded=True):
             _assumption_workbench(ctx, key_prefix="valuation")
 
 
+def _pa11r_financials_reinvestment_tab(ctx: dict, analyst_details: bool) -> None:
+    render_section(
+        "Financials & Reinvestment",
+        "Historical economics, OCF quality, CAPEX split, D&A proxy quality, working capital, SBC, and the actual-to-forecast FCF bridge live here.",
+        "Financials",
+    )
+    capex = _capex_view(ctx)
+    render_status_grid(
+        [
+            {"title": "CAPEX View", "value": capex["view"], "subtitle": capex["dcf_impact"], "status": "warning" if capex["view"] == "Growth-heavy" else "neutral"},
+            {"title": "Maintenance CAPEX", "value": fmt_percent(capex["maintenance"]), "subtitle": capex["method"], "status": "info"},
+            {"title": "Growth CAPEX", "value": fmt_percent(capex["growth"]), "subtitle": capex["evidence_grade"], "status": "caution"},
+            {"title": "Total CAPEX", "value": fmt_percent(capex["total"]), "subtitle": "Maintenance + growth CAPEX.", "status": "neutral"},
+        ],
+        numeric=True,
+    )
+    st.subheader("CAPEX Bridge")
+    show_table(_capex_bridge_table(ctx), "CAPEX bridge unavailable.")
+    dcf = run_dcf(ctx["historicals"], ctx["dataset"].get("market_data", {}), ctx["base_assumptions"])
+    model_table = build_time_axis_financial_model(ctx["historicals"], dcf.get("forecast_table"), ctx["base_assumptions"])
+    capex_rows = model_table[model_table["Line Item"].isin(["Maintenance CAPEX", "Growth CAPEX", "Total CAPEX", "D&A", "Operating cash flow", "FCF", "FCF margin %"])] if model_table is not None and not model_table.empty else pd.DataFrame()
+    render_financial_line_chart(
+        capex_rows,
+        "Maintenance vs Growth CAPEX Over Time",
+        default_items=["Maintenance CAPEX", "Growth CAPEX", "Total CAPEX"],
+        key_prefix="financials_reinvestment_capex_split",
+    )
+    st.caption("D&A proxy is shown explicitly when used; do not treat it as a disclosed maintenance CAPEX split.")
+    _financial_reports(ctx)
+    st.subheader("Accounting / Economic Reality")
+    _accounting_quality(ctx)
+
+
 def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
     render_section(
         "Evidence & Assumptions",
-        "Use this tab to connect filing clauses and manual evidence to DCF assumptions. Tables stay behind expanders unless analyst details are enabled.",
+        "Use this tab to connect filing clauses and manual evidence to DCF assumptions. The default view shows only model-changing evidence.",
         "Evidence",
     )
+    st.subheader("Top Model-Changing Evidence")
+    show_table(_top_clause_impacts(ctx.get("clauses")), "No model-changing evidence loaded yet.")
     _assumption_workbench(ctx, key_prefix="evidence")
-    with st.expander("Clause / News / Event Map", expanded=analyst_details):
+    with st.expander("Show full Clause Map", expanded=analyst_details):
         _clause_annotation_map(ctx)
     with st.expander("Filing Metadata and Guidance", expanded=analyst_details):
         _evidence(ctx)
@@ -3847,20 +4170,22 @@ def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
 def _pa11r_business_quality_tab(ctx: dict, analyst_details: bool) -> None:
     render_section(
         "Business Quality",
-        "Moat, accounting quality, new entrant risk, and thesis breakers are separated from pure valuation.",
+        "Moat, operating leverage, M&A quality, management, SBC alignment, peer quality, and thesis breakers are separated from pure valuation.",
         "Business Quality",
     )
     moat = ctx["moat"]
     render_status_grid(
         [
             {"title": "Moat", "value": _clean_classification(moat.get("classification")), "subtitle": moat.get("terminal_value_implication"), "status": "caution" if "unknown" in _clean_classification(moat.get("classification")).lower() else "supportive", "confidence": moat.get("confidence"), "help_text": f"Moat score: {format_short_score(moat.get('moat_score'))}"},
-            {"title": "Accounting Quality", "value": ctx.get("accounting_interpretation", {}).get("cards", {}).get("OCF Quality") or "Unknown", "subtitle": "OCF / CAPEX / NOPAT interpretation affects DCF confidence.", "status": "caution"},
+            {"title": "Management", "value": ctx.get("management", {}).get("management_score"), "subtitle": ctx.get("management", {}).get("style") or "Manual review required.", "status": "neutral"},
             {"title": "Risk Level", "value": _risk_level(ctx)[0], "subtitle": _risk_level(ctx)[1], "status": _risk_level(ctx)[2]},
         ]
     )
     _company_story(ctx)
-    _accounting_quality(ctx)
     _moat_risks(ctx)
+    _ma_management_sbc(ctx)
+    with st.expander("Peer Quality Comparison", expanded=analyst_details):
+        _multiples_peers(ctx)
 
 
 def _pa11r_management_tab(ctx: dict, analyst_details: bool) -> None:
@@ -3877,9 +4202,9 @@ def _pa11r_management_tab(ctx: dict, analyst_details: bool) -> None:
 def _sources_data_quality_tab(ctx: dict, analyst_details: bool) -> None:
     confidence, subtitle, status = _data_confidence(ctx)
     render_section(
-        "Sources & Data Quality",
+        "Sources & Review",
         "Missing data is a controlled state. It creates a review/fetch plan instead of showing scary top-level errors.",
-        "Data Quality",
+        "Review",
     )
     render_status_grid(
         [
@@ -3901,8 +4226,6 @@ def _sources_data_quality_tab(ctx: dict, analyst_details: bool) -> None:
     with st.expander("Data Coverage Table", expanded=analyst_details):
         show_table(_data_coverage(ctx["dataset"], ctx["historicals"]), "Data coverage unavailable.")
         show_table(_data_quality_table(ctx), "No data-quality notes.")
-    with st.expander("Financial Reports", expanded=False):
-        _financial_reports(ctx)
     if analyst_details:
         _data_lab(ctx, key_prefix="sources")
 
@@ -3919,13 +4242,11 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
     tabs = st.tabs(
         [
             "Snapshot",
-            "Valuation",
-            "SOTP",
-            "Multiples & Peers",
+            "Valuation & DCF",
+            "Financials & Reinvestment",
             "Evidence & Assumptions",
-            "Business Quality",
-            "Management & Capital Allocation",
-            "Sources & Data Quality",
+            "Business Quality & Risks",
+            "Sources & Review",
         ]
     )
     with tabs[0]:
@@ -3933,16 +4254,12 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
     with tabs[1]:
         _pa11r_valuation_tab(ctx, analyst_details)
     with tabs[2]:
-        render_sotp_tab(ctx, analyst_details, key_prefix="pa11r_sotp")
+        _pa11r_financials_reinvestment_tab(ctx, analyst_details)
     with tabs[3]:
-        render_multiples_tab(ctx, key_prefix="pa11r_multiples")
-    with tabs[4]:
         _pa11r_evidence_assumptions_tab(ctx, analyst_details)
-    with tabs[5]:
+    with tabs[4]:
         _pa11r_business_quality_tab(ctx, analyst_details)
-    with tabs[6]:
-        _pa11r_management_tab(ctx, analyst_details)
-    with tabs[7]:
+    with tabs[5]:
         _sources_data_quality_tab(ctx, analyst_details)
 
 

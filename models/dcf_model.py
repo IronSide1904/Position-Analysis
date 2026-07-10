@@ -30,6 +30,9 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
     growth_capex_pct = float(assumptions.get("growth_capex_pct_revenue", 0.02))
     working_capital_pct = float(assumptions.get("working_capital_pct_revenue", 0.01))
     da_pct = float(assumptions.get("depreciation_amortization_pct_revenue", maintenance_capex_pct))
+    if assumptions.get("use_da_as_maintenance_capex_proxy"):
+        maintenance_capex_pct = da_pct
+    capex_fade_year = int(assumptions.get("capex_fade_year", 3) or 3)
     sbc_pct = float(assumptions.get("sbc_pct_revenue", 0.0))
     share_growth = float(assumptions.get("diluted_share_growth", 0.0))
     dcf_mode = str(assumptions.get("dcf_mode", "FCFF")).upper()
@@ -49,11 +52,16 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         nopat = current_revenue * nopat_margin
         da = current_revenue * da_pct
         ocf = current_revenue * ocf_margin
+        effective_growth_capex_pct = growth_capex_pct
+        if year > capex_fade_year and years > capex_fade_year:
+            fade_progress = (year - capex_fade_year) / max(years - capex_fade_year, 1)
+            effective_growth_capex_pct = growth_capex_pct * (1 - 0.5 * fade_progress)
         maintenance_capex = current_revenue * maintenance_capex_pct
-        growth_capex = current_revenue * growth_capex_pct
+        growth_capex = current_revenue * effective_growth_capex_pct
         capex = maintenance_capex + growth_capex
         working_capital = current_revenue * working_capital_pct
         fcff = nopat + da - maintenance_capex - working_capital
+        normalized_cash_earnings = ocf - maintenance_capex
         if dcf_mode == "FCFF":
             fcf = fcff
         elif dcf_mode == "NOPAT":
@@ -72,7 +80,9 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
                 "Maintenance CAPEX": maintenance_capex,
                 "Growth CAPEX": growth_capex,
                 "CAPEX": capex,
+                "Total CAPEX": capex,
                 "Working Capital Investment": working_capital,
+                "Normalized Cash Earnings": normalized_cash_earnings,
                 "SBC": current_revenue * sbc_pct,
                 "FCF": fcf,
                 "FCFF": fcff,
@@ -110,6 +120,7 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         "discounted_terminal_value": pv_terminal,
         "terminal_value_weight_pct": tv_weight,
         "dcf_mode": dcf_mode,
+        "capex_method": "D&A proxy + explicit growth CAPEX" if assumptions.get("use_da_as_maintenance_capex_proxy") else "Explicit maintenance + growth CAPEX",
         "warnings": warnings,
     }
 
@@ -188,6 +199,8 @@ def build_scenario_table(historicals: pd.DataFrame, market_data: dict, base_assu
         "Bear": {"revenue_cagr": -0.03, "gross_margin": -0.03, "wacc": 0.015, "terminal_growth": -0.01, "terminal_multiple": -2.0},
         "Base": {},
         "Bull": {"revenue_cagr": 0.05, "gross_margin": 0.03, "wacc": -0.01, "terminal_growth": 0.01, "terminal_multiple": 2.0},
+        "User": {},
+        "Market-Implied": {},
     }
     values = {}
     for scenario, deltas in scenarios.items():
@@ -196,6 +209,8 @@ def build_scenario_table(historicals: pd.DataFrame, market_data: dict, base_assu
             assumptions[key] = float(assumptions.get(key, 0) or 0) + delta
         assumptions["wacc"] = max(float(assumptions.get("wacc", 0.095)), 0.04)
         dcf = run_dcf(historicals, market_data, assumptions)
+        final_revenue = dcf.get("forecast_table", pd.DataFrame()).iloc[-1].get("Revenue") if not dcf.get("forecast_table", pd.DataFrame()).empty else None
+        final_fcf = dcf.get("forecast_table", pd.DataFrame()).iloc[-1].get("FCF") if not dcf.get("forecast_table", pd.DataFrame()).empty else None
         values[scenario] = {
             "Revenue CAGR": assumptions.get("revenue_cagr"),
             "Gross margin": assumptions.get("gross_margin"),
@@ -204,6 +219,10 @@ def build_scenario_table(historicals: pd.DataFrame, market_data: dict, base_assu
             "OCF margin": assumptions.get("ocf_margin"),
             "Maintenance CAPEX % revenue": assumptions.get("maintenance_capex_pct_revenue"),
             "Growth CAPEX % revenue": assumptions.get("growth_capex_pct_revenue"),
+            "Total CAPEX % revenue": (float(assumptions.get("maintenance_capex_pct_revenue") or 0) + float(assumptions.get("growth_capex_pct_revenue") or 0)),
+            "CAPEX Normalization Year": assumptions.get("capex_fade_year"),
+            "Working Capital % revenue": assumptions.get("working_capital_pct_revenue"),
+            "FCF margin": (final_fcf / final_revenue) if final_revenue else None,
             "WACC": assumptions.get("wacc"),
             "Terminal growth": assumptions.get("terminal_growth"),
             "Terminal multiple": assumptions.get("terminal_multiple"),
@@ -214,7 +233,7 @@ def build_scenario_table(historicals: pd.DataFrame, market_data: dict, base_assu
     rows = []
     for line_item in next(iter(values.values())).keys():
         row = {"Line Item": line_item}
-        for scenario in ["Bear", "Base", "Bull"]:
+        for scenario in ["Bear", "Base", "Bull", "User", "Market-Implied"]:
             row[scenario] = values[scenario][line_item]
         rows.append(row)
     return pd.DataFrame(rows)
@@ -227,6 +246,14 @@ def default_assumptions_from_historicals(historicals: pd.DataFrame, market_data:
     ocf = _latest(historicals, "OCF")
     capex = _latest(historicals, "Total CAPEX")
     da = max(_latest(historicals, "EBITDA") - _latest(historicals, "EBIT"), 0)
+    total_capex_pct = capex / revenue if revenue else 0.05
+    da_pct = da / revenue if revenue else 0.03
+    use_da_proxy = bool(da_pct > 0)
+    maintenance_capex_pct = da_pct if use_da_proxy else min(total_capex_pct, 0.08)
+    growth_capex_pct = max(total_capex_pct - maintenance_capex_pct, 0.0)
+    maintenance_capex_pct = maintenance_capex_pct or 0.03
+    if not revenue:
+        growth_capex_pct = 0.02
     sbc = _latest(historicals, "SBC")
     latest_shares = _latest(historicals, "Diluted Shares") or market_data.get("shares_outstanding")
     prior_shares = float(historicals["Diluted Shares"].dropna().iloc[-2]) if historicals is not None and len(historicals.get("Diluted Shares", pd.Series(dtype=float)).dropna()) >= 2 else latest_shares
@@ -240,9 +267,12 @@ def default_assumptions_from_historicals(historicals: pd.DataFrame, market_data:
         "tax_rate": DCF_DEFAULTS["tax_rate"],
         "nopat_margin": (ebit / revenue) * (1 - DCF_DEFAULTS["tax_rate"]) if revenue else 0.12,
         "ocf_margin": ocf / revenue if revenue else 0.16,
-        "maintenance_capex_pct_revenue": min(capex / revenue, 0.08) if revenue else 0.03,
-        "growth_capex_pct_revenue": 0.02,
-        "depreciation_amortization_pct_revenue": da / revenue if revenue else 0.03,
+        "maintenance_capex_pct_revenue": maintenance_capex_pct,
+        "growth_capex_pct_revenue": growth_capex_pct,
+        "total_capex_pct_revenue": maintenance_capex_pct + growth_capex_pct,
+        "depreciation_amortization_pct_revenue": da_pct,
+        "use_da_as_maintenance_capex_proxy": use_da_proxy,
+        "capex_fade_year": 3,
         "working_capital_pct_revenue": 0.01,
         "sbc_pct_revenue": sbc / revenue if revenue else 0.0,
         "diluted_share_growth": diluted_share_growth,

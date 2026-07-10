@@ -1,6 +1,6 @@
 import pandas as pd
 
-from models.dcf_model import default_assumptions_from_historicals, run_dcf
+from models.dcf_model import build_scenario_table, default_assumptions_from_historicals, run_dcf
 
 
 def sample_historicals():
@@ -37,3 +37,44 @@ def test_user_adjusted_assumption_updates_fair_value():
     high = run_dcf(historicals, market, {**assumptions, "revenue_cagr": 0.20})["fair_value_per_share"]
     assert high > low
 
+
+def test_dcf_forecast_explicitly_models_reinvestment_lines():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    result = run_dcf(historicals, market, assumptions)
+    forecast = result["forecast_table"]
+
+    for column in [
+        "Maintenance CAPEX",
+        "Growth CAPEX",
+        "Total CAPEX",
+        "Working Capital Investment",
+        "Normalized Cash Earnings",
+        "FCF",
+        "FCFF",
+    ]:
+        assert column in forecast.columns
+
+    first_year = forecast.iloc[0]
+    assert first_year["Total CAPEX"] == first_year["Maintenance CAPEX"] + first_year["Growth CAPEX"]
+    assert first_year["Normalized Cash Earnings"] == first_year["OCF"] - first_year["Maintenance CAPEX"]
+
+
+def test_scenario_table_includes_capex_assumptions():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    table = build_scenario_table(historicals, market, assumptions)
+
+    required_rows = {
+        "Maintenance CAPEX % revenue",
+        "Growth CAPEX % revenue",
+        "Total CAPEX % revenue",
+        "CAPEX Normalization Year",
+        "Working Capital % revenue",
+        "FCF margin",
+        "Fair value per share",
+    }
+    assert required_rows.issubset(set(table["Line Item"]))
+    assert {"Bear", "Base", "Bull", "User", "Market-Implied"}.issubset(table.columns)
