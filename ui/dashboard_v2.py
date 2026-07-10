@@ -842,12 +842,22 @@ def _top_clause_impacts(clauses: pd.DataFrame) -> pd.DataFrame:
     return frame.rename(columns=rename)
 
 
-def _first_sentences(text: str | None, limit: int = 3) -> str:
+def _clip_text(text: object, max_chars: int = 360) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean or clean == UNAVAILABLE:
+        return UNAVAILABLE
+    if len(clean) <= max_chars:
+        return clean
+    clipped = clean[: max_chars + 1].rsplit(" ", 1)[0].rstrip(" .,;:")
+    return f"{clipped}..."
+
+
+def _first_sentences(text: str | None, limit: int = 2, max_chars: int = 360) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
     if not clean:
         return UNAVAILABLE
     sentences = re.split(r"(?<=[.!?])\s+", clean)
-    return " ".join(sentences[:limit])
+    return _clip_text(" ".join(sentences[:limit]), max_chars=max_chars)
 
 
 def _company_story(ctx: dict) -> None:
@@ -874,7 +884,7 @@ def _company_story(ctx: dict) -> None:
     c1, c2 = st.columns([0.58, 0.42])
     with c1:
         st.subheader("Business and Products")
-        st.write(_first_sentences(description, limit=4))
+        st.write(_first_sentences(description, limit=2, max_chars=420))
         story_rows = pd.DataFrame(
             [
                 {"Topic": "Business model", "Read": profile.get("business_model", UNAVAILABLE), "Evidence": "; ".join(profile.get("evidence", [])[:2]) or "Manual review required"},
@@ -888,7 +898,7 @@ def _company_story(ctx: dict) -> None:
 
     with c2:
         st.subheader("Management / Founder Story")
-        st.write(management.get("summary") or "Management story unavailable. Load SEC evidence for deeper founder, board, and governance context.")
+        st.write(_clip_text(management.get("summary") or "Management story unavailable. Load SEC evidence for deeper founder, board, and governance context.", 360))
         metric_row(
             [
                 ("Style", management.get("style"), "text"),
@@ -3662,27 +3672,37 @@ def _company_story_context(ctx: dict) -> None:
     c1, c2 = st.columns([0.55, 0.45])
     with c1:
         st.markdown("**Company Story**")
-        st.write(story.get("business_summary") or "Unavailable")
+        st.write(_clip_text(story.get("business_summary") or "Unavailable", 320))
         st.markdown("**How They Make Money**")
-        st.write(story.get("how_they_make_money") or "Unavailable")
+        st.write(_clip_text(story.get("how_they_make_money") or "Unavailable", 260))
     with c2:
         st.markdown("**Assumption Implications**")
         implications = story.get("assumption_implications") or []
         if implications:
-            for item in implications[:5]:
-                st.write(f"- {item.get('assumption')}: {item.get('implication')} Confidence: {item.get('confidence')}.")
+            for item in implications[:3]:
+                implication = _clip_text(item.get("implication"), 130)
+                st.write(f"- {item.get('assumption')}: {implication} ({item.get('confidence')})")
         else:
             st.write("Unavailable")
     with st.expander("Show full company story and assumption context", expanded=False):
         st.markdown("**Product story**")
-        st.write(story.get("product_story") or "Unavailable")
+        st.write(_clip_text(story.get("product_story") or "Unavailable", 420))
         st.markdown("**Industry positioning**")
-        st.write(story.get("industry_positioning") or "Unavailable")
+        st.write(_clip_text(story.get("industry_positioning") or "Unavailable", 360))
         st.markdown("**Peers**")
-        st.write(story.get("peer_context") or "Unavailable")
+        st.write(_clip_text(story.get("peer_context") or "Unavailable", 260))
         st.markdown("**Buzz/news context**")
-        st.write(story.get("buzz_context") or "Social/news buzz unavailable.")
-        show_table(pd.DataFrame(story.get("manual_review_questions") or []), "No manual-review questions generated.")
+        st.write(_clip_text(story.get("buzz_context") or "Social/news buzz unavailable.", 260))
+        review_rows = []
+        for item in (story.get("manual_review_questions") or [])[:4]:
+            review_rows.append(
+                {
+                    "Question": _clip_text(item.get("Question"), 110),
+                    "Why it matters": _clip_text(item.get("Why it matters"), 140),
+                    "Model assumption affected": item.get("Model assumption affected"),
+                }
+            )
+        show_table(pd.DataFrame(review_rows), "No manual-review questions generated.")
         show_table(pd.DataFrame({"Sources used": story.get("sources_used") or ["Unavailable"]}), "No story sources available.")
 
 

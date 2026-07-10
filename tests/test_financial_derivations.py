@@ -98,3 +98,22 @@ def test_company_story_does_not_hallucinate_missing_buzz():
     assert story["buzz_context"] == "Social/news buzz unavailable."
     assert story["manual_review_questions"]
     assert any(item["assumption"] == "Revenue CAGR" for item in story["assumption_implications"])
+
+
+def test_company_story_summary_is_compact():
+    long_description = " ".join(["This company provides a broad enterprise AI data platform with services and products."] * 30)
+    story = build_company_story_summary(
+        {
+            "ticker": "TEST",
+            "company": "Test Corp",
+            "sector": "Technology",
+            "industry": "Software",
+            "company_description": long_description,
+        },
+        filing_texts={"10-K": " ".join(["The company sells software, data services, and managed workflows."] * 30)},
+        peers=pd.DataFrame(),
+    )
+
+    assert len(story["business_summary"]) <= 323
+    assert len(story["product_story"]) <= 363
+    assert len(story["industry_positioning"]) <= 363
