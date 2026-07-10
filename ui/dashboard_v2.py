@@ -1972,12 +1972,12 @@ def render_assumption_slider(
         )
     elif unit == "multiple":
         edited_display = st.number_input(
-            input_label,
+            "User value (x)",
             min_value=float(min_value),
             max_value=float(max_value),
             value=float(input_value),
             step=float(step),
-            format="%.1fx",
+            format="%.1f",
             help=f"Enter the exact multiple. Difference versus Base Case is {delta_text}.",
             key=f"assumption_number_{scenario_scope}_{key}",
         )
