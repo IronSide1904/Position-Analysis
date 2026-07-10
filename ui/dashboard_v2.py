@@ -2457,43 +2457,65 @@ def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFr
 
 def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, scenario_scope: str, profile: str) -> dict:
     ticker = ctx["dataset"].get("ticker", "default")
-    st.markdown('<div class="pa-section-title">DCF Assumption Table</div>', unsafe_allow_html=True)
-    st.caption("Edit forecast assumptions directly in human units. Percentage rows use 8.0 to mean 8.0%. Calculated DCF rows are shown below as formatted output.")
+    market = ctx["dataset"].get("market_data", {})
+    st.markdown('<div class="pa-section-title">Excel-Style DCF Assumption Model</div>', unsafe_allow_html=True)
+    st.caption("Edit the forecast assumption rows directly. Percentage rows use human units: enter 8.0 for 8.0%. Actual and calculated output rows stay locked in the model output table.")
     original_matrix, specs = _build_assumption_matrix(working, ctx.get("historicals"))
     period_columns = [label for _, label in specs]
     read_only = scenario_scope == "Market-Implied Case"
     edited_matrix = st.data_editor(
         original_matrix,
         width="stretch",
+        height=520,
         hide_index=True,
+        column_config={"Row Key": None},
         disabled=["Row Key", "Assumption", "Unit", "Evidence", *period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
         key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}",
     )
     changes = handle_assumption_table_edit(edited_matrix, original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns)
     edited = _apply_assumption_matrix(working, edited_matrix, specs)
 
-    st.markdown("**Valuation Assumptions**")
-    original_valuation = _build_valuation_assumption_table(edited)
-    edited_valuation = st.data_editor(
-        original_valuation,
-        width="stretch",
-        hide_index=True,
-        disabled=["Row Key", "Assumption", "Unit", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
-        key=f"dcf_valuation_matrix_{ticker}_{scenario_scope}",
-    )
-    changes.extend(handle_assumption_table_edit(edited_valuation, original_valuation, VALUATION_ROW_METADATA, scenario_scope, ["Value"]))
-    edited = _apply_valuation_assumption_table(edited, edited_valuation)
+    val_col, explain_col = st.columns([0.48, 0.52])
+    with val_col:
+        st.markdown("**Terminal / Valuation Assumptions**")
+        original_valuation = _build_valuation_assumption_table(edited)
+        edited_valuation = st.data_editor(
+            original_valuation,
+            width="stretch",
+            hide_index=True,
+            column_config={"Row Key": None},
+            disabled=["Row Key", "Assumption", "Unit", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
+            key=f"dcf_valuation_matrix_{ticker}_{scenario_scope}",
+        )
+        changes.extend(handle_assumption_table_edit(edited_valuation, original_valuation, VALUATION_ROW_METADATA, scenario_scope, ["Value"]))
+        edited = _apply_valuation_assumption_table(edited, edited_valuation)
     _append_unique_assumption_changes(ticker, changes)
 
-    row_options = list(DCF_ROW_METADATA.keys()) + list(VALUATION_ROW_METADATA.keys())
-    selected_row = st.selectbox(
-        "Selected row explanation",
-        row_options,
-        format_func=lambda key: (DCF_ROW_METADATA.get(key) or VALUATION_ROW_METADATA.get(key))["label"],
-        key=f"selected_dcf_matrix_row_{ticker}",
+    with explain_col:
+        row_options = list(DCF_ROW_METADATA.keys()) + list(VALUATION_ROW_METADATA.keys())
+        selected_row = st.selectbox(
+            "Selected row explanation",
+            row_options,
+            format_func=lambda key: (DCF_ROW_METADATA.get(key) or VALUATION_ROW_METADATA.get(key))["label"],
+            key=f"selected_dcf_matrix_row_{ticker}",
+        )
+        explanation_key = (DCF_ROW_METADATA.get(selected_row) or VALUATION_ROW_METADATA.get(selected_row))["explanation_key"]
+        _render_assumption_explanation(explanation_key, profile, f"{scenario_scope} table edit", "User-edited" if changes else _assumption_source(explanation_key, scenario_scope, edited.get(explanation_key), base.get(explanation_key)), calculate_assumption_impact(base, edited, explanation_key, ctx["historicals"], market))
+
+    edited_dcf = run_dcf(ctx["historicals"], market, edited)
+    base_dcf = run_dcf(ctx["historicals"], market, base)
+    st.markdown('<div class="pa-section-title">Live Valuation Recalculation</div>', unsafe_allow_html=True)
+    metric_row(
+        [
+            ("Edited Fair Value", edited_dcf.get("fair_value_per_share"), "per_share"),
+            ("Base Fair Value", base_dcf.get("fair_value_per_share"), "per_share"),
+            ("Current Price", market.get("price"), "per_share"),
+            ("Upside / Downside", edited_dcf.get("upside_downside_pct"), "pct"),
+        ]
     )
-    explanation_key = (DCF_ROW_METADATA.get(selected_row) or VALUATION_ROW_METADATA.get(selected_row))["explanation_key"]
-    _render_assumption_explanation(explanation_key, profile, f"{scenario_scope} table edit", "User-edited" if changes else _assumption_source(explanation_key, scenario_scope, edited.get(explanation_key), base.get(explanation_key)), calculate_assumption_impact(base, edited, explanation_key, ctx["historicals"], ctx["dataset"].get("market_data", {})))
+    st.markdown('<div class="pa-section-title">Calculated DCF Output (Locked)</div>', unsafe_allow_html=True)
+    st.caption("These rows recalculate from the editable assumption table above. They are display-only formula outputs, like the locked rows in an Excel model.")
+    _show_financial_table(_dcf_forecast_output_table(edited_dcf, edited, ctx.get("historicals")), "DCF output unavailable.")
     _render_matrix_validation_warnings(edited, ctx.get("historicals"))
     if st.session_state.get("assumption_update_log"):
         st.markdown('<div class="pa-section-title">Assumption Change Log</div>', unsafe_allow_html=True)
@@ -2706,8 +2728,7 @@ def _assumption_editor(ctx: dict) -> dict:
     user_state_key = f"assumption_user_case_{ctx['dataset'].get('ticker', 'default')}"
     st.session_state.setdefault(user_state_key, dict(base))
 
-    st.subheader("DCF Assumption Workbench")
-    st.caption("Adjust assumptions with clear scenario scope, source, model impact, fair-value impact, and notes. The data-fetching layer is unchanged.")
+    st.caption("Table-first workflow: choose a case, then edit the forecast rows below.")
 
     scope_col, compare_col = st.columns([0.58, 0.42])
     with scope_col:
@@ -2732,62 +2753,71 @@ def _assumption_editor(ctx: dict) -> dict:
     market_case_assumptions = _market_implied_assumptions(reverse or {}, scenarios["Base Case"])
     working = dict(market_case_assumptions if scenario_scope == "Market-Implied Case" else scenarios[scenario_scope])
 
-    preset_cols = st.columns(4)
-    if preset_cols[0].button("Reset User Case to Base", key="reset_user_case_to_base"):
-        st.session_state[user_state_key] = dict(scenarios["Base Case"])
-        working = dict(st.session_state[user_state_key])
-        st.success("User Case reset to Base Case.")
-    if preset_cols[1].button("Copy Bull Case to User Case", key="copy_bull_to_user_case"):
-        st.session_state[user_state_key] = dict(scenarios["Bull Case"])
-        working = dict(st.session_state[user_state_key])
-        st.success("Bull Case copied to User Case.")
-    if preset_cols[2].button("Copy Bear Case to User Case", key="copy_bear_to_user_case"):
-        st.session_state[user_state_key] = dict(scenarios["Bear Case"])
-        working = dict(st.session_state[user_state_key])
-        st.success("Bear Case copied to User Case.")
-    show_legacy_controls = preset_cols[3].toggle("Show legacy slider controls", value=False, help="Optional. The editable DCF table is the primary assumption workflow.")
+    with st.expander("Scenario reset / copy actions", expanded=False):
+        preset_cols = st.columns(3)
+        if preset_cols[0].button("Reset User Case to Base", key="reset_user_case_to_base"):
+            st.session_state[user_state_key] = dict(scenarios["Base Case"])
+            working = dict(st.session_state[user_state_key])
+            st.success("User Case reset to Base Case.")
+        if preset_cols[1].button("Copy Bull Case to User Case", key="copy_bull_to_user_case"):
+            st.session_state[user_state_key] = dict(scenarios["Bull Case"])
+            working = dict(st.session_state[user_state_key])
+            st.success("Bull Case copied to User Case.")
+        if preset_cols[2].button("Copy Bear Case to User Case", key="copy_bear_to_user_case"):
+            st.session_state[user_state_key] = dict(scenarios["Bear Case"])
+            working = dict(st.session_state[user_state_key])
+            st.success("Bear Case copied to User Case.")
 
-    st.markdown('<div class="pa-section-title">Valuation Basis</div>', unsafe_allow_html=True)
     basis_default = next((label for label, item in VALUATION_BASIS_OPTIONS.items() if item["mode"] == str(working.get("dcf_mode", "FCFF")).upper()), "NOPAT bridge")
-    basis = st.segmented_control("Current valuation basis", list(VALUATION_BASIS_OPTIONS.keys()), default=basis_default)
-    basis = basis or basis_default
-    st.caption(VALUATION_BASIS_OPTIONS[basis]["description"])
-    working["dcf_mode"] = VALUATION_BASIS_OPTIONS[basis]["mode"]
+    working["dcf_mode"] = VALUATION_BASIS_OPTIONS[basis_default]["mode"]
+    working["use_direct_nopat_override"] = bool(working.get("use_direct_nopat_override", False))
+    working["use_da_as_maintenance_capex_proxy"] = bool(working.get("use_da_as_maintenance_capex_proxy", False))
+    with st.expander("Model method controls", expanded=False):
+        basis = st.segmented_control("Current valuation basis", list(VALUATION_BASIS_OPTIONS.keys()), default=basis_default)
+        basis = basis or basis_default
+        st.caption(VALUATION_BASIS_OPTIONS[basis]["description"])
+        working["dcf_mode"] = VALUATION_BASIS_OPTIONS[basis]["mode"]
 
-    direct_nopat_override = st.toggle(
-        "Use direct NOPAT margin override instead of OPEX-derived EBIT bridge",
-        value=bool(working.get("use_direct_nopat_override", False)),
-        help="Off: NOPAT is derived from Gross Margin minus OPEX % Revenue, then tax. On: the Direct NOPAT Margin slider controls NOPAT directly.",
-    )
-    working["use_direct_nopat_override"] = direct_nopat_override
+        direct_nopat_override = st.toggle(
+            "Use direct NOPAT margin override instead of OPEX-derived EBIT bridge",
+            value=bool(working.get("use_direct_nopat_override", False)),
+            help="Off: NOPAT is derived from Gross Margin minus OPEX % Revenue, then tax. On: direct NOPAT margin controls NOPAT.",
+        )
+        working["use_direct_nopat_override"] = direct_nopat_override
 
-    use_da_proxy = st.toggle(
-        "Use D&A proxy for Maintenance CAPEX",
-        value=bool(working.get("use_da_as_maintenance_capex_proxy", False)),
-        help="When enabled, maintenance CAPEX follows D&A % revenue. Use this only when maintenance/growth CAPEX is not disclosed.",
-    )
-    working["use_da_as_maintenance_capex_proxy"] = use_da_proxy
+        use_da_proxy = st.toggle(
+            "Use D&A proxy for Maintenance CAPEX",
+            value=bool(working.get("use_da_as_maintenance_capex_proxy", False)),
+            help="When enabled, maintenance CAPEX follows D&A % revenue. Use this only when maintenance/growth CAPEX is not disclosed.",
+        )
+        working["use_da_as_maintenance_capex_proxy"] = use_da_proxy
 
     edited = _render_assumption_matrix_workbench(ctx, base, working, scenario_scope, profile)
     if scenario_scope == "User Case":
         st.session_state[user_state_key] = dict(edited)
 
-    comparison = _scenario_comparison_table(scenarios, reverse, edited)
-    st.markdown('<div class="pa-section-title">Scenario Comparison Mini Table</div>', unsafe_allow_html=True)
-    show_table(comparison, "Scenario comparison unavailable.")
+    bottom_col, impact_col = st.columns([0.58, 0.42])
+    with bottom_col:
+        comparison = _scenario_comparison_table(scenarios, reverse, edited)
+        st.markdown('<div class="pa-section-title">Scenario Comparison</div>', unsafe_allow_html=True)
+        show_table(comparison, "Scenario comparison unavailable.")
 
-    st.markdown('<div class="pa-section-title">Fair Value Impact</div>', unsafe_allow_html=True)
-    base_fv = run_dcf(historicals, market, base).get("fair_value_per_share")
-    edited_fv = run_dcf(historicals, market, edited).get("fair_value_per_share")
-    fv_delta = (edited_fv - base_fv) if edited_fv is not None and base_fv is not None else None
-    metric_row(
-        [
-            ("Base Fair Value", base_fv, "per_share"),
-            ("Edited Fair Value", edited_fv, "per_share"),
-            ("Change vs Base", fv_delta, "per_share"),
-        ]
-    )
+    with impact_col:
+        st.markdown('<div class="pa-section-title">Fair Value Impact</div>', unsafe_allow_html=True)
+        base_fv = run_dcf(historicals, market, base).get("fair_value_per_share")
+        edited_fv = run_dcf(historicals, market, edited).get("fair_value_per_share")
+        fv_delta = (edited_fv - base_fv) if edited_fv is not None and base_fv is not None else None
+        metric_row(
+            [
+                ("Base Fair Value", base_fv, "per_share"),
+                ("Edited Fair Value", edited_fv, "per_share"),
+                ("Change vs Base", fv_delta, "per_share"),
+            ]
+        )
 
+    show_legacy_controls = False
+    with st.expander("Optional legacy slider controls", expanded=False):
+        show_legacy_controls = st.toggle("Enable legacy sliders for quick one-line adjustments", value=False, help="The DCF table above is the primary modeling interface.")
     if not show_legacy_controls:
         return edited
 
@@ -3365,10 +3395,7 @@ def _overview(ctx: dict) -> None:
 
 def _valuation(ctx: dict) -> None:
     market = ctx["dataset"].get("market_data", {})
-    st.caption("DCF Assumption Workbench: choose scenario scope, edit assumptions with context, see fair-value impact, then review the detailed model.")
-    left, right = st.columns([0.52, 0.48])
-    with left:
-        assumptions = _assumption_editor(ctx)
+    assumptions = _assumption_editor(ctx)
     user_dcf = run_dcf(ctx["historicals"], market, assumptions)
     reverse = run_reverse_dcf(market, ctx["historicals"], assumptions)
     model_table = build_time_axis_financial_model(ctx["historicals"], user_dcf.get("forecast_table"), assumptions)
@@ -3392,48 +3419,47 @@ def _valuation(ctx: dict) -> None:
     assumptions_table = _assumption_evidence_table(assumptions)
     accounting_flags = _accounting_assumption_flags(ctx.get("accounting_interpretation"), assumptions)
 
-    with right:
-        st.markdown('<div class="pa-section-title">Step 3: Valuation Impact</div>', unsafe_allow_html=True)
-        metric_row(
-            [
-                ("Fair Value / Share", user_dcf.get("fair_value_per_share"), "per_share"),
-                ("Current Price", market.get("price"), "per_share"),
-                ("Upside / Downside", user_dcf.get("upside_downside_pct"), "pct"),
-            ]
+    st.markdown('<div class="pa-section-title">Valuation Readout</div>', unsafe_allow_html=True)
+    metric_row(
+        [
+            ("Fair Value / Share", user_dcf.get("fair_value_per_share"), "per_share"),
+            ("Current Price", market.get("price"), "per_share"),
+            ("Upside / Downside", user_dcf.get("upside_downside_pct"), "pct"),
+        ]
+    )
+    metric_row(
+        [
+            ("Enterprise Value", user_dcf.get("enterprise_value"), "money"),
+            ("Equity Value", user_dcf.get("equity_value"), "money"),
+            ("Diluted Shares", assumptions.get("diluted_shares"), "shares"),
+            ("MOS Buy Price", user_dcf.get("buy_price_after_margin_of_safety"), "per_share"),
+        ]
+    )
+    metric_row(
+        [
+            ("Terminal Value % EV", user_dcf.get("terminal_value_weight_pct"), "pct"),
+            ("DCF Confidence", ctx.get("accounting_interpretation", {}).get("valuation_confidence"), "text"),
+            ("Reverse DCF", reverse.get("market_case"), "text"),
+        ]
+    )
+    if user_dcf.get("upside_downside_pct") is not None:
+        if user_dcf.get("upside_downside_pct") < 0:
+            _notice("Overvalued under current assumptions.", "risk")
+        else:
+            _notice("Potentially undervalued under current assumptions.", "success")
+    if user_dcf.get("terminal_value_weight_pct") and user_dcf.get("terminal_value_weight_pct") > 0.65:
+        _notice(
+            f"Terminal Value Warning: terminal value represents {fmt_percent(user_dcf.get('terminal_value_weight_pct'))} of enterprise value. The valuation is highly sensitive to terminal assumptions.",
+            "warning",
         )
-        metric_row(
-            [
-                ("Enterprise Value", user_dcf.get("enterprise_value"), "money"),
-                ("Equity Value", user_dcf.get("equity_value"), "money"),
-                ("Diluted Shares", assumptions.get("diluted_shares"), "shares"),
-            ]
-        )
-        metric_row(
-            [
-                ("MOS Buy Price", user_dcf.get("buy_price_after_margin_of_safety"), "per_share"),
-                ("Terminal Value % EV", user_dcf.get("terminal_value_weight_pct"), "pct"),
-                ("DCF Confidence", ctx.get("accounting_interpretation", {}).get("valuation_confidence"), "text"),
-            ]
-        )
-        if user_dcf.get("upside_downside_pct") is not None:
-            if user_dcf.get("upside_downside_pct") < 0:
-                _notice("Overvalued under current assumptions.", "risk")
-            else:
-                _notice("Potentially undervalued under current assumptions.", "success")
-        if user_dcf.get("terminal_value_weight_pct") and user_dcf.get("terminal_value_weight_pct") > 0.65:
-            _notice(
-                f"Terminal Value Warning: terminal value represents {fmt_percent(user_dcf.get('terminal_value_weight_pct'))} of enterprise value. The valuation is highly sensitive to terminal assumptions.",
-                "warning",
-            )
-        show_warnings(user_dcf.get("warnings", []))
-        show_warnings(ctx.get("accounting_interpretation", {}).get("warnings", []))
-        show_table(valuation_summary, "Valuation summary unavailable.")
+    show_warnings(user_dcf.get("warnings", []))
+    show_warnings(ctx.get("accounting_interpretation", {}).get("warnings", []))
 
-    st.markdown('<div class="pa-section-title">Step 4: Review Detailed Model</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pa-section-title">Charts & Detailed Review</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(fcf_projection_chart(ctx["historicals"], user_dcf["forecast_table"]), width="stretch", key="v2_fcf_projection")
-        st.caption("The line chart compares reported FCF with the forecast generated from the current sliders.")
+        st.caption("The line chart compares reported FCF with the forecast generated from the current assumption table.")
     with c2:
         st.plotly_chart(reverse_dcf_chart(reverse, assumptions), width="stretch", key="v2_reverse_dcf")
         st.caption("Reverse DCF compares your revenue CAGR assumption with the growth implied by the current market price.")
@@ -4452,41 +4478,39 @@ def _assumption_workbench(ctx: dict, key_prefix: str = "evidence") -> None:
 
 
 def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
-    render_section(
-        "Valuation Result",
-        "Reverse DCF is treated as the market benchmark. Compare your base/user case against what the current price already implies.",
-        "Valuation",
-    )
+    st.markdown('<div class="pa-section-title">Interactive DCF Model</div>', unsafe_allow_html=True)
+    st.caption("Edit the forecast model table first. Valuation cards and scenario snapshots sit underneath the live DCF cockpit.")
     market = ctx["dataset"].get("market_data", {})
     dcf = ctx["base_dcf"]
     reverse = ctx["reverse"]
     assumptions = ctx["base_assumptions"]
-    render_status_grid(
-        [
-            {"title": "Fair Value / Share", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": "Base-case DCF output.", "status": "info"},
-            {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Market price from provider snapshot.", "status": "neutral"},
-            {"title": "Upside / Downside", "value": fmt_percent(dcf.get("upside_downside_pct")), "subtitle": "Fair value versus market price.", "status": "supportive" if (dcf.get("upside_downside_pct") or 0) > 0 else "warning"},
-            {"title": "MOS Buy Price", "value": fmt_per_share(dcf.get("buy_price_after_margin_of_safety")), "subtitle": "Buy zone after margin of safety.", "status": "info"},
-            {"title": "Market-Implied Case", "value": reverse.get("market_case") or "Unknown", "subtitle": reverse.get("interpretation"), "status": "info"},
-            {"title": "Terminal Value Weight", "value": fmt_percent(dcf.get("terminal_value_weight_pct")), "subtitle": "Higher weight means more terminal sensitivity.", "status": "warning" if (dcf.get("terminal_value_weight_pct") or 0) > 0.65 else "neutral"},
-        ],
-        numeric=True,
-    )
-    show_table(
-        pd.DataFrame(
-            [
-                {"Case": "Bear Case", "Revenue CAGR": max((assumptions.get("revenue_cagr") or 0) - 0.03, -0.2), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": (assumptions.get("growth_capex_pct_revenue") or 0) + 0.02, "Total CAPEX % Revenue": (assumptions.get("maintenance_capex_pct_revenue") or 0) + (assumptions.get("growth_capex_pct_revenue") or 0) + 0.02, "FCF Margin": None, "Fair Value / Share": None, "Read": "Stress lower growth / higher reinvestment"},
-                {"Case": "Base Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": assumptions.get("growth_capex_pct_revenue"), "Total CAPEX % Revenue": assumptions.get("total_capex_pct_revenue"), "FCF Margin": None, "Fair Value / Share": dcf.get("fair_value_per_share"), "Read": "Dashboard base case"},
-                {"Case": "Bull Case", "Revenue CAGR": (assumptions.get("revenue_cagr") or 0) + 0.05, "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": max((assumptions.get("growth_capex_pct_revenue") or 0) - 0.01, 0), "Total CAPEX % Revenue": (assumptions.get("maintenance_capex_pct_revenue") or 0) + max((assumptions.get("growth_capex_pct_revenue") or 0) - 0.01, 0), "FCF Margin": None, "Fair Value / Share": None, "Read": "Evidence-supported growth with CAPEX normalization"},
-                {"Case": "User Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": assumptions.get("growth_capex_pct_revenue"), "Total CAPEX % Revenue": assumptions.get("total_capex_pct_revenue"), "FCF Margin": None, "Fair Value / Share": dcf.get("fair_value_per_share"), "Read": "Editable through assumption controls"},
-                {"Case": "Market-Implied Case", "Revenue CAGR": reverse.get("implied_revenue_cagr"), "Maintenance CAPEX % Revenue": "Not solved", "Growth CAPEX % Revenue": "Not solved", "Total CAPEX % Revenue": "Not solved", "FCF Margin": "Not solved", "Fair Value / Share": market.get("price"), "Read": "Reverse DCF solves growth/margin, not CAPEX directly"},
-            ]
-        ),
-        "Scenario comparison unavailable.",
-    )
     profile = infer_stock_profile(ctx["dataset"])
-    st.info(f"Stock-profile assumption group: {profile}. The control panel below uses existing assumptions until profile-specific operating KPIs are available.")
+    st.caption(f"Stock-profile assumption group: {profile}.")
     _valuation(ctx)
+    with st.expander("Base Valuation Snapshot", expanded=False):
+        render_status_grid(
+            [
+                {"title": "Fair Value / Share", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": "Base-case DCF output.", "status": "info"},
+                {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Market price from provider snapshot.", "status": "neutral"},
+                {"title": "Upside / Downside", "value": fmt_percent(dcf.get("upside_downside_pct")), "subtitle": "Fair value versus market price.", "status": "supportive" if (dcf.get("upside_downside_pct") or 0) > 0 else "warning"},
+                {"title": "MOS Buy Price", "value": fmt_per_share(dcf.get("buy_price_after_margin_of_safety")), "subtitle": "Buy zone after margin of safety.", "status": "info"},
+                {"title": "Market-Implied Case", "value": reverse.get("market_case") or "Unknown", "subtitle": reverse.get("interpretation"), "status": "info"},
+                {"title": "Terminal Value Weight", "value": fmt_percent(dcf.get("terminal_value_weight_pct")), "subtitle": "Higher weight means more terminal sensitivity.", "status": "warning" if (dcf.get("terminal_value_weight_pct") or 0) > 0.65 else "neutral"},
+            ],
+            numeric=True,
+        )
+        show_table(
+            pd.DataFrame(
+                [
+                    {"Case": "Bear Case", "Revenue CAGR": max((assumptions.get("revenue_cagr") or 0) - 0.03, -0.2), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": (assumptions.get("growth_capex_pct_revenue") or 0) + 0.02, "Total CAPEX % Revenue": (assumptions.get("maintenance_capex_pct_revenue") or 0) + (assumptions.get("growth_capex_pct_revenue") or 0) + 0.02, "FCF Margin": None, "Fair Value / Share": None, "Read": "Stress lower growth / higher reinvestment"},
+                    {"Case": "Base Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": assumptions.get("growth_capex_pct_revenue"), "Total CAPEX % Revenue": assumptions.get("total_capex_pct_revenue"), "FCF Margin": None, "Fair Value / Share": dcf.get("fair_value_per_share"), "Read": "Dashboard base case"},
+                    {"Case": "Bull Case", "Revenue CAGR": (assumptions.get("revenue_cagr") or 0) + 0.05, "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": max((assumptions.get("growth_capex_pct_revenue") or 0) - 0.01, 0), "Total CAPEX % Revenue": (assumptions.get("maintenance_capex_pct_revenue") or 0) + max((assumptions.get("growth_capex_pct_revenue") or 0) - 0.01, 0), "FCF Margin": None, "Fair Value / Share": None, "Read": "Evidence-supported growth with CAPEX normalization"},
+                    {"Case": "User Case", "Revenue CAGR": assumptions.get("revenue_cagr"), "Maintenance CAPEX % Revenue": assumptions.get("maintenance_capex_pct_revenue"), "Growth CAPEX % Revenue": assumptions.get("growth_capex_pct_revenue"), "Total CAPEX % Revenue": assumptions.get("total_capex_pct_revenue"), "FCF Margin": None, "Fair Value / Share": dcf.get("fair_value_per_share"), "Read": "Editable through assumption controls"},
+                    {"Case": "Market-Implied Case", "Revenue CAGR": reverse.get("implied_revenue_cagr"), "Maintenance CAPEX % Revenue": "Not solved", "Growth CAPEX % Revenue": "Not solved", "Total CAPEX % Revenue": "Not solved", "FCF Margin": "Not solved", "Fair Value / Share": market.get("price"), "Read": "Reverse DCF solves growth/margin, not CAPEX directly"},
+                ]
+            ),
+            "Scenario comparison unavailable.",
+        )
     with st.expander("SOTP Lens", expanded=False):
         render_sotp_tab(ctx, analyst_details, key_prefix="pa11r_valuation_sotp")
     with st.expander("Multiples / Peer Lens", expanded=False):
