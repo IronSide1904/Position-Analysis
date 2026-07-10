@@ -1,6 +1,7 @@
 import pandas as pd
 
 from models.dcf_model import build_scenario_table, default_assumptions_from_historicals, run_dcf
+from ui.dashboard_v2 import _dcf_forecast_output_table
 
 
 def sample_historicals():
@@ -78,3 +79,19 @@ def test_scenario_table_includes_capex_assumptions():
     }
     assert required_rows.issubset(set(table["Line Item"]))
     assert {"Bear", "Base", "Bull", "User", "Market-Implied"}.issubset(table.columns)
+
+
+def test_dcf_output_table_starts_with_latest_actual_column():
+    historicals = sample_historicals()
+    historicals.loc[0, "Period"] = "2025"
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    result = run_dcf(historicals, market, assumptions)
+
+    table = _dcf_forecast_output_table(result, assumptions, historicals)
+
+    assert "2025A" in table.columns
+    assert table.columns.tolist().index("2025A") < table.columns.tolist().index("FY1E")
+    revenue_row = table[table["Metric"] == "Revenue"].iloc[0]
+    assert revenue_row["2025A"] == 1000.0
+    assert revenue_row["FY1E"] > revenue_row["2025A"]

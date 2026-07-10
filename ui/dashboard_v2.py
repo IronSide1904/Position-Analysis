@@ -1212,7 +1212,90 @@ def _peer_summary_table(peer_df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict) -> pd.DataFrame:
+def _ratio_or_none(numerator, denominator):
+    try:
+        if numerator is None or denominator in (None, 0) or pd.isna(numerator) or pd.isna(denominator):
+            return None
+        return float(numerator) / float(denominator)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _latest_actual_column_label(historicals: pd.DataFrame | None) -> str:
+    if historicals is None or historicals.empty or "Period" not in historicals:
+        return "Latest Actual"
+    period = str(historicals.iloc[-1].get("Period") or "").strip()
+    if not period or period.lower() in {"latest", "nan", "none"}:
+        return "Latest Actual"
+    return period if period.endswith("A") else f"{period}A"
+
+
+def _add_latest_actual_dcf_column(rows_by_metric: dict, historicals: pd.DataFrame | None, assumptions: dict) -> float | None:
+    if historicals is None or historicals.empty:
+        return None
+    latest = historicals.iloc[-1]
+    prior = historicals.iloc[-2] if len(historicals) >= 2 else None
+    column = _latest_actual_column_label(historicals)
+
+    def value(name: str):
+        return latest.get(name) if name in latest else None
+
+    revenue = value("Revenue")
+    prior_revenue = prior.get("Revenue") if prior is not None and "Revenue" in prior else None
+    revenue_growth = _ratio_or_none(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None
+    ebit = value("EBIT")
+    tax_rate = value("Tax Rate")
+    if tax_rate is None:
+        tax_rate = assumptions.get("tax_rate")
+    nopat = value("NOPAT")
+    if nopat is None and ebit is not None and tax_rate is not None:
+        nopat = float(ebit) * (1 - float(tax_rate))
+    da = value("D&A")
+    if da is None and value("EBITDA") is not None and ebit is not None:
+        da = max(float(value("EBITDA") or 0) - float(ebit or 0), 0)
+    ocf = value("OCF")
+    maintenance_capex = value("Maintenance CAPEX")
+    total_capex = value("Total CAPEX")
+    if maintenance_capex is None and revenue is not None:
+        maintenance_capex = float(revenue) * float(assumptions.get("maintenance_capex_pct_revenue") or 0)
+    growth_capex = value("Growth CAPEX")
+    if growth_capex is None and total_capex is not None and maintenance_capex is not None:
+        growth_capex = max(float(total_capex or 0) - float(maintenance_capex or 0), 0)
+    if total_capex is None and maintenance_capex is not None and growth_capex is not None:
+        total_capex = float(maintenance_capex or 0) + float(growth_capex or 0)
+    working_capital = value("Working Capital Investment")
+    fcf = value("FCF")
+    if fcf is None and ocf is not None and total_capex is not None:
+        fcf = float(ocf or 0) - float(total_capex or 0)
+    fcff = value("FCFF")
+    if fcff is None and nopat is not None and da is not None and maintenance_capex is not None:
+        fcff = float(nopat or 0) + float(da or 0) - float(maintenance_capex or 0) - float(working_capital or 0)
+
+    rows_by_metric["Revenue"][column] = revenue
+    rows_by_metric["Revenue Growth %"][column] = revenue_growth
+    rows_by_metric["EBIT"][column] = ebit
+    rows_by_metric["EBIT Margin %"][column] = _ratio_or_none(ebit, revenue)
+    rows_by_metric["Tax Rate"][column] = tax_rate
+    rows_by_metric["NOPAT"][column] = nopat
+    rows_by_metric["D&A"][column] = da
+    rows_by_metric["D&A % Revenue"][column] = _ratio_or_none(da, revenue)
+    rows_by_metric["OCF"][column] = ocf
+    rows_by_metric["OCF Margin %"][column] = _ratio_or_none(ocf, revenue)
+    rows_by_metric["Maintenance CAPEX"][column] = maintenance_capex
+    rows_by_metric["Maintenance CAPEX % Revenue"][column] = _ratio_or_none(maintenance_capex, revenue)
+    rows_by_metric["Growth CAPEX"][column] = growth_capex
+    rows_by_metric["Growth CAPEX % Revenue"][column] = _ratio_or_none(growth_capex, revenue)
+    rows_by_metric["Total CAPEX"][column] = total_capex
+    rows_by_metric["Total CAPEX % Revenue"][column] = _ratio_or_none(total_capex, revenue)
+    rows_by_metric["Working Capital"][column] = working_capital
+    rows_by_metric["Working Capital % Revenue"][column] = _ratio_or_none(working_capital, revenue)
+    rows_by_metric["FCF"][column] = fcf
+    rows_by_metric["FCF Margin %"][column] = _ratio_or_none(fcf, revenue)
+    rows_by_metric["FCFF"][column] = fcff
+    return revenue
+
+
+def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals: pd.DataFrame | None = None) -> pd.DataFrame:
     forecast = dcf_output.get("forecast_table", pd.DataFrame())
     if forecast is None or forecast.empty:
         return pd.DataFrame()
@@ -1245,7 +1328,7 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict) -> pd.DataFr
     ]
     rows = [{"Metric": metric} for metric in metrics]
     row_by_metric = {row["Metric"]: row for row in rows}
-    prior_revenue = None
+    prior_revenue = _add_latest_actual_dcf_column(row_by_metric, historicals, assumptions)
     tax_rate = float(assumptions.get("tax_rate", 0.21) or 0.21)
     for _, row in forecast.iterrows():
         year = int(row.get("Year") or 0)
@@ -2996,7 +3079,7 @@ def _valuation(ctx: dict) -> None:
     reverse = run_reverse_dcf(market, ctx["historicals"], assumptions)
     model_table = build_time_axis_financial_model(ctx["historicals"], user_dcf.get("forecast_table"), assumptions)
     derivation_log = build_financial_derivation_log(model_table)
-    dcf_output_table = _dcf_forecast_output_table(user_dcf, assumptions)
+    dcf_output_table = _dcf_forecast_output_table(user_dcf, assumptions, ctx["historicals"])
     dcf_bridge_table = build_dcf_output_table(user_dcf, assumptions, market)
     reverse_table = build_reverse_dcf_table(reverse, assumptions, market)
     ev_bridge = build_ev_to_equity_bridge(market, user_dcf, assumptions)
