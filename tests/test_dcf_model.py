@@ -53,6 +53,23 @@ def test_dcf_uses_last_positive_revenue_before_market_cap_fallback():
     assert result["forecast_table"].iloc[0]["Revenue"] == 7200.0 * (1 + assumptions["revenue_cagr"])
 
 
+def test_dcf_accepts_year_specific_forecast_assumptions():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    assumptions["forecast_assumptions_by_year"] = {
+        "1": {"revenue_cagr": 0.10, "ocf_margin": 0.20},
+        "2": {"revenue_cagr": 0.05, "ocf_margin": 0.30},
+    }
+
+    forecast = run_dcf(historicals, market, assumptions)["forecast_table"]
+
+    assert forecast.iloc[0]["Revenue Growth"] == 0.10
+    assert forecast.iloc[1]["Revenue Growth"] == 0.05
+    assert forecast.iloc[0]["OCF Margin"] == 0.20
+    assert forecast.iloc[1]["OCF Margin"] == 0.30
+
+
 def test_dcf_forecast_explicitly_models_reinvestment_lines():
     historicals = sample_historicals()
     market = {"price": 10.0, "shares_outstanding": 100.0}

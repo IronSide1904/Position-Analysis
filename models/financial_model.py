@@ -423,13 +423,17 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
 
 def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_revenue=None, prior_shares=None) -> dict:
     revenue = forecast_row.get("Revenue")
-    gross_margin = assumptions.get("gross_margin")
+    gross_margin = forecast_row.get("Gross Margin", assumptions.get("gross_margin"))
     gross_profit = revenue * gross_margin if revenue is not None and gross_margin is not None else None
     sm = revenue * float(assumptions.get("sm_pct_revenue") or 0) if revenue is not None else None
     rd = revenue * float(assumptions.get("rd_pct_revenue") or 0) if revenue is not None else None
     ga = revenue * float(assumptions.get("ga_pct_revenue") or 0) if revenue is not None else None
-    ebit = forecast_row.get("NOPAT") / max(1 - float(assumptions.get("tax_rate", 0.21)), 0.01) if forecast_row.get("NOPAT") is not None else None
-    opex = gross_profit - ebit if gross_profit is not None and ebit is not None else (sm or 0) + (rd or 0) + (ga or 0)
+    ebit = forecast_row.get("EBIT")
+    if ebit is None and forecast_row.get("NOPAT") is not None:
+        ebit = forecast_row.get("NOPAT") / max(1 - float(forecast_row.get("Tax Rate", assumptions.get("tax_rate", 0.21))), 0.01)
+    opex = forecast_row.get("OPEX")
+    if opex is None:
+        opex = gross_profit - ebit if gross_profit is not None and ebit is not None else (sm or 0) + (rd or 0) + (ga or 0)
     da = forecast_row.get("D&A")
     ebitda = ebit + da if ebit is not None and da is not None else None
     ocf = forecast_row.get("OCF")
@@ -456,36 +460,36 @@ def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_rev
         "G&A": ga,
         "G&A % revenue": assumptions.get("ga_pct_revenue"),
         "Total OPEX": opex,
-        "OPEX % revenue": _safe_div(opex, revenue),
+        "OPEX % revenue": forecast_row.get("OPEX % Revenue", _safe_div(opex, revenue)),
         "EBIT": ebit,
-        "EBIT margin %": _safe_div(ebit, revenue),
+        "EBIT margin %": forecast_row.get("EBIT Margin", _safe_div(ebit, revenue)),
         "D&A": da,
-        "D&A % revenue": _safe_div(da, revenue),
+        "D&A % revenue": forecast_row.get("D&A % Revenue", _safe_div(da, revenue)),
         "EBITDA": ebitda,
         "EBITDA margin %": _safe_div(ebitda, revenue),
-        "Tax rate": assumptions.get("tax_rate"),
+        "Tax rate": forecast_row.get("Tax Rate", assumptions.get("tax_rate")),
         "NOPAT": forecast_row.get("NOPAT"),
-        "NOPAT margin %": _safe_div(forecast_row.get("NOPAT"), revenue),
+        "NOPAT margin %": forecast_row.get("NOPAT Margin", _safe_div(forecast_row.get("NOPAT"), revenue)),
         "Operating cash flow": ocf,
-        "OCF margin %": _safe_div(ocf, revenue),
+        "OCF margin %": forecast_row.get("OCF Margin", _safe_div(ocf, revenue)),
         "Adjusted OCF": adjusted_ocf,
         "Adjusted OCF margin %": _safe_div(adjusted_ocf, revenue),
         "Maintenance CAPEX": maintenance_capex,
-        "Maintenance CAPEX % revenue": _safe_div(maintenance_capex, revenue),
+        "Maintenance CAPEX % revenue": forecast_row.get("Maintenance CAPEX % Revenue", _safe_div(maintenance_capex, revenue)),
         "Growth CAPEX": growth_capex,
-        "Growth CAPEX % revenue": _safe_div(growth_capex, revenue),
+        "Growth CAPEX % revenue": forecast_row.get("Growth CAPEX % Revenue", _safe_div(growth_capex, revenue)),
         "Total CAPEX": total_capex,
-        "Total CAPEX % revenue": _safe_div(total_capex, revenue),
+        "Total CAPEX % revenue": forecast_row.get("Total CAPEX % Revenue", _safe_div(total_capex, revenue)),
         "FCF": fcf,
         "FCF margin %": _safe_div(fcf, revenue),
         "Adjusted FCF": adjusted_fcf,
         "Adjusted FCF margin %": _safe_div(adjusted_fcf, revenue),
         "SBC": sbc,
-        "SBC % revenue": _safe_div(sbc, revenue),
+        "SBC % revenue": forecast_row.get("SBC % Revenue", _safe_div(sbc, revenue)),
         "SBC % gross profit": _safe_div(sbc, gross_profit),
         "SBC % OCF": _safe_div(sbc, ocf),
         "Diluted shares": shares,
-        "Diluted shares growth %": _safe_div(float(shares or 0) - float(prior_shares or 0), prior_shares) if prior_shares else None,
+        "Diluted shares growth %": forecast_row.get("Diluted Share Growth", _safe_div(float(shares or 0) - float(prior_shares or 0), prior_shares) if prior_shares else None),
     }
 
 

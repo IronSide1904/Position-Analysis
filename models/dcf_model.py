@@ -22,6 +22,13 @@ def _latest_positive(historicals: pd.DataFrame, column: str, default: float = 0.
     return float(values.iloc[-1]) if not values.empty else default
 
 
+def _yearly_assumption(assumptions: dict, year: int, key: str, default=None):
+    yearly = assumptions.get("forecast_assumptions_by_year") or {}
+    year_values = yearly.get(str(year)) or yearly.get(year) or {}
+    value = year_values.get(key, assumptions.get(key, default))
+    return default if value is None else value
+
+
 def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> dict:
     """
     Forecast 5+ years and compute EV, equity value, and fair value per share.
@@ -32,7 +39,10 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         revenue = float(market_data.get("market_cap") or 0) * 0.25
     revenue_cagr = float(assumptions.get("revenue_cagr", 0.08))
     tax_rate = float(assumptions.get("tax_rate", DCF_DEFAULTS["tax_rate"]))
-    nopat_margin = float(assumptions.get("nopat_margin", assumptions.get("operating_margin", 0.15) * (1 - tax_rate)))
+    gross_margin = float(assumptions.get("gross_margin", 0.45))
+    opex_pct = float(assumptions.get("opex_pct_revenue", max(gross_margin - float(assumptions.get("operating_margin", 0.15)), 0.0)))
+    operating_margin = float(assumptions.get("operating_margin", gross_margin - opex_pct))
+    nopat_margin = float(assumptions.get("nopat_margin", operating_margin * (1 - tax_rate)))
     ocf_margin = float(assumptions.get("ocf_margin", 0.18))
     maintenance_capex_pct = float(assumptions.get("maintenance_capex_pct_revenue", 0.03))
     growth_capex_pct = float(assumptions.get("growth_capex_pct_revenue", 0.02))
@@ -56,18 +66,37 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
     discounted_fcfs = []
     current_revenue = revenue
     for year in range(1, years + 1):
-        current_revenue *= 1 + revenue_cagr
-        nopat = current_revenue * nopat_margin
-        da = current_revenue * da_pct
-        ocf = current_revenue * ocf_margin
-        effective_growth_capex_pct = growth_capex_pct
+        year_revenue_cagr = float(_yearly_assumption(assumptions, year, "revenue_cagr", revenue_cagr))
+        year_tax_rate = float(_yearly_assumption(assumptions, year, "tax_rate", tax_rate))
+        year_gross_margin = float(_yearly_assumption(assumptions, year, "gross_margin", gross_margin))
+        year_opex_pct = float(_yearly_assumption(assumptions, year, "opex_pct_revenue", opex_pct))
+        year_operating_margin = float(_yearly_assumption(assumptions, year, "operating_margin", year_gross_margin - year_opex_pct))
+        year_nopat_margin = float(_yearly_assumption(assumptions, year, "nopat_margin", year_operating_margin * (1 - year_tax_rate)))
+        year_ocf_margin = float(_yearly_assumption(assumptions, year, "ocf_margin", ocf_margin))
+        year_da_pct = float(_yearly_assumption(assumptions, year, "depreciation_amortization_pct_revenue", da_pct))
+        year_maintenance_capex_pct = float(_yearly_assumption(assumptions, year, "maintenance_capex_pct_revenue", maintenance_capex_pct))
+        if assumptions.get("use_da_as_maintenance_capex_proxy"):
+            year_maintenance_capex_pct = year_da_pct
+        year_growth_capex_pct = float(_yearly_assumption(assumptions, year, "growth_capex_pct_revenue", growth_capex_pct))
+        year_working_capital_pct = float(_yearly_assumption(assumptions, year, "working_capital_pct_revenue", working_capital_pct))
+        year_sbc_pct = float(_yearly_assumption(assumptions, year, "sbc_pct_revenue", sbc_pct))
+        year_share_growth = float(_yearly_assumption(assumptions, year, "diluted_share_growth", share_growth))
+
+        current_revenue *= 1 + year_revenue_cagr
+        gross_profit = current_revenue * year_gross_margin
+        opex = current_revenue * year_opex_pct
+        ebit = current_revenue * year_operating_margin
+        nopat = current_revenue * year_nopat_margin
+        da = current_revenue * year_da_pct
+        ocf = current_revenue * year_ocf_margin
+        effective_growth_capex_pct = year_growth_capex_pct
         if year > capex_fade_year and years > capex_fade_year:
             fade_progress = (year - capex_fade_year) / max(years - capex_fade_year, 1)
-            effective_growth_capex_pct = growth_capex_pct * (1 - 0.5 * fade_progress)
-        maintenance_capex = current_revenue * maintenance_capex_pct
+            effective_growth_capex_pct = year_growth_capex_pct * (1 - 0.5 * fade_progress)
+        maintenance_capex = current_revenue * year_maintenance_capex_pct
         growth_capex = current_revenue * effective_growth_capex_pct
         capex = maintenance_capex + growth_capex
-        working_capital = current_revenue * working_capital_pct
+        working_capital = current_revenue * year_working_capital_pct
         fcff = nopat + da - maintenance_capex - working_capital
         normalized_cash_earnings = ocf - maintenance_capex
         if dcf_mode == "FCFF":
@@ -82,19 +111,37 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
             {
                 "Year": year,
                 "Revenue": current_revenue,
+                "Revenue Growth": year_revenue_cagr,
+                "Gross Margin": year_gross_margin,
+                "COGS % Revenue": 1 - year_gross_margin,
+                "Gross Profit": gross_profit,
+                "OPEX % Revenue": year_opex_pct,
+                "OPEX": opex,
+                "EBIT": ebit,
+                "EBIT Margin": year_operating_margin,
+                "Tax Rate": year_tax_rate,
                 "D&A": da,
+                "D&A % Revenue": year_da_pct,
                 "NOPAT": nopat,
+                "NOPAT Margin": year_nopat_margin,
                 "OCF": ocf,
+                "OCF Margin": year_ocf_margin,
                 "Maintenance CAPEX": maintenance_capex,
+                "Maintenance CAPEX % Revenue": year_maintenance_capex_pct,
                 "Growth CAPEX": growth_capex,
+                "Growth CAPEX % Revenue": effective_growth_capex_pct,
                 "CAPEX": capex,
                 "Total CAPEX": capex,
+                "Total CAPEX % Revenue": (year_maintenance_capex_pct + effective_growth_capex_pct),
                 "Working Capital Investment": working_capital,
+                "Working Capital % Revenue": year_working_capital_pct,
                 "Normalized Cash Earnings": normalized_cash_earnings,
-                "SBC": current_revenue * sbc_pct,
+                "SBC": current_revenue * year_sbc_pct,
+                "SBC % Revenue": year_sbc_pct,
                 "FCF": fcf,
                 "FCFF": fcff,
-                "Diluted Shares": shares * ((1 + share_growth) ** year) if shares else None,
+                "Diluted Shares": shares * ((1 + year_share_growth) ** year) if shares else None,
+                "Diluted Share Growth": year_share_growth,
                 "PV FCF": pv,
             }
         )

@@ -1343,7 +1343,6 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
     rows = [{"Metric": metric} for metric in metrics]
     row_by_metric = {row["Metric"]: row for row in rows}
     prior_revenue = _add_latest_actual_dcf_column(row_by_metric, historicals, assumptions)
-    tax_rate = float(assumptions.get("tax_rate", 0.21) or 0.21)
     for _, row in forecast.iterrows():
         year = int(row.get("Year") or 0)
         suffix = "E" if year == 1 else "F"
@@ -1352,8 +1351,11 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
         revenue_growth = (revenue / prior_revenue - 1) if prior_revenue else assumptions.get("revenue_cagr")
         prior_revenue = revenue
         discount_factor = 1 / ((1 + float(assumptions.get("wacc", 0.095))) ** year)
+        tax_rate = row.get("Tax Rate", float(assumptions.get("tax_rate", 0.21) or 0.21))
         nopat = row.get("NOPAT")
-        ebit = nopat / max(1 - tax_rate, 0.01) if nopat is not None else None
+        ebit = row.get("EBIT")
+        if ebit is None:
+            ebit = nopat / max(1 - tax_rate, 0.01) if nopat is not None else None
         da = row.get("D&A")
         ocf = row.get("OCF")
         maintenance_capex = row.get("Maintenance CAPEX")
@@ -1365,21 +1367,21 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
         row_by_metric["Revenue"][column] = revenue
         row_by_metric["Revenue Growth %"][column] = revenue_growth
         row_by_metric["EBIT"][column] = ebit
-        row_by_metric["EBIT Margin %"][column] = ebit / revenue if revenue else None
+        row_by_metric["EBIT Margin %"][column] = row.get("EBIT Margin", ebit / revenue if revenue else None)
         row_by_metric["Tax Rate"][column] = tax_rate
         row_by_metric["NOPAT"][column] = nopat
         row_by_metric["D&A"][column] = da
-        row_by_metric["D&A % Revenue"][column] = da / revenue if revenue else None
+        row_by_metric["D&A % Revenue"][column] = row.get("D&A % Revenue", da / revenue if revenue else None)
         row_by_metric["OCF"][column] = ocf
-        row_by_metric["OCF Margin %"][column] = ocf / revenue if revenue else None
+        row_by_metric["OCF Margin %"][column] = row.get("OCF Margin", ocf / revenue if revenue else None)
         row_by_metric["Maintenance CAPEX"][column] = maintenance_capex
-        row_by_metric["Maintenance CAPEX % Revenue"][column] = maintenance_capex / revenue if revenue else None
+        row_by_metric["Maintenance CAPEX % Revenue"][column] = row.get("Maintenance CAPEX % Revenue", maintenance_capex / revenue if revenue else None)
         row_by_metric["Growth CAPEX"][column] = growth_capex
-        row_by_metric["Growth CAPEX % Revenue"][column] = growth_capex / revenue if revenue else None
+        row_by_metric["Growth CAPEX % Revenue"][column] = row.get("Growth CAPEX % Revenue", growth_capex / revenue if revenue else None)
         row_by_metric["Total CAPEX"][column] = total_capex
-        row_by_metric["Total CAPEX % Revenue"][column] = total_capex / revenue if revenue else None
+        row_by_metric["Total CAPEX % Revenue"][column] = row.get("Total CAPEX % Revenue", total_capex / revenue if revenue else None)
         row_by_metric["Working Capital"][column] = working_capital
-        row_by_metric["Working Capital % Revenue"][column] = working_capital / revenue if revenue else None
+        row_by_metric["Working Capital % Revenue"][column] = row.get("Working Capital % Revenue", working_capital / revenue if revenue else None)
         row_by_metric["FCF"][column] = fcf
         row_by_metric["FCF Margin %"][column] = fcf / revenue if revenue else None
         row_by_metric["FCFF"][column] = fcff
@@ -2254,6 +2256,258 @@ def _control_warning(key: str, value: float | None, range_info: dict, historical
     return None
 
 
+DCF_ROW_METADATA = {
+    "revenue_cagr": {"label": "Revenue Growth %", "unit": "%", "assumption_key": "revenue_cagr", "source": "Scenario-based", "explanation_key": "revenue_cagr"},
+    "cogs_pct_revenue": {"label": "COGS % Revenue", "unit": "%", "assumption_key": "gross_margin", "source": "Calculated", "explanation_key": "gross_margin"},
+    "opex_pct_revenue": {"label": "OPEX % Revenue", "unit": "%", "assumption_key": "opex_pct_revenue", "source": "Calculated", "explanation_key": "opex_pct_revenue"},
+    "tax_rate": {"label": "Tax Rate", "unit": "%", "assumption_key": "tax_rate", "source": "Estimated", "explanation_key": "tax_rate"},
+    "nopat_margin": {"label": "NOPAT Margin Override %", "unit": "%", "assumption_key": "nopat_margin", "source": "Calculated", "explanation_key": "nopat_margin"},
+    "ocf_margin": {"label": "OCF Margin %", "unit": "%", "assumption_key": "ocf_margin", "source": "Calculated", "explanation_key": "ocf_margin"},
+    "depreciation_amortization_pct_revenue": {"label": "D&A % Revenue", "unit": "%", "assumption_key": "depreciation_amortization_pct_revenue", "source": "Calculated", "explanation_key": "depreciation_amortization_pct_revenue"},
+    "maintenance_capex_pct_revenue": {"label": "Maintenance CAPEX % Revenue", "unit": "%", "assumption_key": "maintenance_capex_pct_revenue", "source": "Proxy-based", "explanation_key": "maintenance_capex_pct_revenue"},
+    "growth_capex_pct_revenue": {"label": "Growth CAPEX % Revenue", "unit": "%", "assumption_key": "growth_capex_pct_revenue", "source": "Estimated", "explanation_key": "growth_capex_pct_revenue"},
+    "working_capital_pct_revenue": {"label": "Working Capital % Revenue", "unit": "%", "assumption_key": "working_capital_pct_revenue", "source": "Estimated", "explanation_key": "working_capital_pct_revenue"},
+    "sbc_pct_revenue": {"label": "SBC % Revenue", "unit": "%", "assumption_key": "sbc_pct_revenue", "source": "Calculated", "explanation_key": "sbc_pct_revenue"},
+    "diluted_share_growth": {"label": "Diluted Share Growth %", "unit": "%", "assumption_key": "diluted_share_growth", "source": "Calculated", "explanation_key": "diluted_share_growth"},
+}
+
+
+VALUATION_ROW_METADATA = {
+    "wacc": {"label": "WACC", "unit": "%", "assumption_key": "wacc", "source": "Estimated", "explanation_key": "wacc"},
+    "terminal_growth": {"label": "Terminal Growth %", "unit": "%", "assumption_key": "terminal_growth", "source": "Scenario-based", "explanation_key": "terminal_growth"},
+    "terminal_multiple": {"label": "Terminal Multiple", "unit": "x", "assumption_key": "terminal_multiple", "source": "Scenario-based", "explanation_key": "terminal_multiple"},
+    "margin_of_safety": {"label": "Margin of Safety %", "unit": "%", "assumption_key": "margin_of_safety", "source": "User-edited", "explanation_key": "margin_of_safety"},
+    "capex_fade_year": {"label": "CAPEX Normalization Year", "unit": "years", "assumption_key": "capex_fade_year", "source": "Scenario-based", "explanation_key": "capex_fade_year"},
+}
+
+
+def _latest_model_year(historicals: pd.DataFrame | None) -> int | None:
+    if historicals is None or historicals.empty or "Period" not in historicals:
+        return None
+    for period in reversed(historicals["Period"].dropna().astype(str).tolist()):
+        match = re.search(r"(20\d{2}|19\d{2})", period)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _forecast_period_specs(historicals: pd.DataFrame | None, years: int) -> list[tuple[int, str]]:
+    latest_year = _latest_model_year(historicals)
+    specs = []
+    for year in range(1, int(years or 5) + 1):
+        if latest_year:
+            label = f"FY{latest_year + year}{'E' if year == 1 else 'F'}"
+        else:
+            label = f"FY{year}{'E' if year == 1 else 'F'}"
+        specs.append((year, label))
+    return specs
+
+
+def _display_assumption_number(value, unit: str):
+    if value is None:
+        return None
+    if unit == "%":
+        return round(float(value) * 100, 2)
+    if unit == "years":
+        return int(float(value))
+    return round(float(value), 2)
+
+
+def _internal_assumption_number(value, unit: str):
+    if value is None or value == "":
+        return None
+    if unit == "%":
+        return float(value) / 100
+    if unit == "years":
+        return int(float(value))
+    return float(value)
+
+
+def _matrix_value_for_key(assumptions: dict, year: int, row_key: str):
+    yearly = assumptions.get("forecast_assumptions_by_year") or {}
+    year_values = yearly.get(str(year)) or yearly.get(year) or {}
+    if row_key == "cogs_pct_revenue":
+        gross = year_values.get("gross_margin", assumptions.get("gross_margin"))
+        return 1 - _assumption_float(gross, 0.45)
+    meta = DCF_ROW_METADATA[row_key]
+    return year_values.get(meta["assumption_key"], assumptions.get(meta["assumption_key"]))
+
+
+def _build_assumption_matrix(assumptions: dict, historicals: pd.DataFrame | None) -> tuple[pd.DataFrame, list[tuple[int, str]]]:
+    specs = _forecast_period_specs(historicals, int(assumptions.get("forecast_years", 5) or 5))
+    rows = []
+    for row_key, meta in DCF_ROW_METADATA.items():
+        row = {"Row Key": row_key, "Assumption": meta["label"], "Unit": meta["unit"], "Evidence": meta["source"]}
+        for year, label in specs:
+            row[label] = _display_assumption_number(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
+        rows.append(row)
+    return pd.DataFrame(rows), specs
+
+
+def _build_valuation_assumption_table(assumptions: dict) -> pd.DataFrame:
+    rows = []
+    for row_key, meta in VALUATION_ROW_METADATA.items():
+        value = assumptions.get(meta["assumption_key"])
+        rows.append(
+            {
+                "Row Key": row_key,
+                "Assumption": meta["label"],
+                "Unit": meta["unit"],
+                "Value": _display_assumption_number(value, meta["unit"]),
+                "Evidence": meta["source"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def handle_assumption_table_edit(edited_df, original_df, row_metadata, scenario_name, period_columns=None) -> list[dict]:
+    changes = []
+    original = original_df.set_index("Row Key")
+    edited = edited_df.set_index("Row Key")
+    columns = period_columns or ["Value"]
+    for row_key, meta in row_metadata.items():
+        if row_key not in edited.index or row_key not in original.index:
+            continue
+        for period in columns:
+            if period not in edited.columns or period not in original.columns:
+                continue
+            old_value = original.at[row_key, period]
+            new_value = edited.at[row_key, period]
+            try:
+                old_float = float(old_value)
+                new_float = float(new_value)
+            except (TypeError, ValueError):
+                continue
+            if abs(old_float - new_float) <= 0.000001:
+                continue
+            changes.append(
+                {
+                    "timestamp": pd.Timestamp.utcnow().isoformat(),
+                    "scenario": scenario_name,
+                    "row_key": row_key,
+                    "label": meta["label"],
+                    "period": period,
+                    "old_value": old_float,
+                    "new_value": new_float,
+                    "unit": meta["unit"],
+                    "source": "User-edited",
+                    "reason / user note": "",
+                    "fair_value_impact": "Recalculate after activation",
+                    "status": "Active",
+                }
+            )
+    return changes
+
+
+def _apply_assumption_matrix(assumptions: dict, edited_matrix: pd.DataFrame, specs: list[tuple[int, str]]) -> dict:
+    out = dict(assumptions)
+    yearly = {str(key): dict(value) for key, value in (out.get("forecast_assumptions_by_year") or {}).items()}
+    for _, row in edited_matrix.iterrows():
+        row_key = row.get("Row Key")
+        meta = DCF_ROW_METADATA.get(row_key)
+        if not meta:
+            continue
+        for year, label in specs:
+            value = _internal_assumption_number(row.get(label), meta["unit"])
+            if value is None:
+                continue
+            year_values = yearly.setdefault(str(year), {})
+            if row_key == "cogs_pct_revenue":
+                year_values["gross_margin"] = max(0.0, min(1.0, 1 - value))
+            else:
+                year_values[meta["assumption_key"]] = value
+    out["forecast_assumptions_by_year"] = yearly
+    return _normalize_assumption_bridge(out, bool(out.get("use_direct_nopat_override")))
+
+
+def _apply_valuation_assumption_table(assumptions: dict, edited_table: pd.DataFrame) -> dict:
+    out = dict(assumptions)
+    for _, row in edited_table.iterrows():
+        row_key = row.get("Row Key")
+        meta = VALUATION_ROW_METADATA.get(row_key)
+        if not meta:
+            continue
+        value = _internal_assumption_number(row.get("Value"), meta["unit"])
+        if value is not None:
+            out[meta["assumption_key"]] = value
+    return _normalize_assumption_bridge(out, bool(out.get("use_direct_nopat_override")))
+
+
+def _append_unique_assumption_changes(ticker: str, changes: list[dict]) -> None:
+    if not changes:
+        return
+    signature = "|".join(f"{item['scenario']}:{item['row_key']}:{item['period']}:{item['old_value']}->{item['new_value']}" for item in changes)
+    state_key = f"last_assumption_matrix_signature_{ticker}"
+    if st.session_state.get(state_key) == signature:
+        return
+    st.session_state[state_key] = signature
+    st.session_state.setdefault("assumption_update_log", []).extend(changes)
+
+
+def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFrame | None) -> None:
+    warnings = validate_assumption_ranges(assumptions, historicals)
+    if (assumptions.get("sbc_pct_revenue") or 0) > 0.10:
+        warnings.append({"Assumption": "SBC % Revenue", "Current Value": format_assumption_value(assumptions.get("sbc_pct_revenue"), "percent"), "Severity": "Medium", "Reason": "SBC above 10% should flag dilution risk.", "Suggested Review": "Check diluted share growth and SBC quality."})
+    if (assumptions.get("terminal_multiple") or 0) > 15:
+        warnings.append({"Assumption": "Terminal Multiple", "Current Value": format_assumption_value(assumptions.get("terminal_multiple"), "multiple"), "Severity": "Medium", "Reason": "Terminal multiple above 15x requires durable growth or moat evidence.", "Suggested Review": "Review moat score, peer multiples, and terminal value weight."})
+    if warnings:
+        st.markdown('<div class="pa-section-title">Validation Warnings</div>', unsafe_allow_html=True)
+        show_table(pd.DataFrame(warnings), "No validation warnings.")
+
+
+def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, scenario_scope: str, profile: str) -> dict:
+    ticker = ctx["dataset"].get("ticker", "default")
+    st.markdown('<div class="pa-section-title">DCF Assumption Table</div>', unsafe_allow_html=True)
+    st.caption("Edit forecast assumptions directly in human units. Percentage rows use 8.0 to mean 8.0%. Calculated DCF rows are shown below as formatted output.")
+    original_matrix, specs = _build_assumption_matrix(working, ctx.get("historicals"))
+    period_columns = [label for _, label in specs]
+    read_only = scenario_scope == "Market-Implied Case"
+    edited_matrix = st.data_editor(
+        original_matrix,
+        width="stretch",
+        hide_index=True,
+        disabled=["Row Key", "Assumption", "Unit", "Evidence", *period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
+        key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}",
+    )
+    changes = handle_assumption_table_edit(edited_matrix, original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns)
+    edited = _apply_assumption_matrix(working, edited_matrix, specs)
+
+    st.markdown("**Valuation Assumptions**")
+    original_valuation = _build_valuation_assumption_table(edited)
+    edited_valuation = st.data_editor(
+        original_valuation,
+        width="stretch",
+        hide_index=True,
+        disabled=["Row Key", "Assumption", "Unit", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
+        key=f"dcf_valuation_matrix_{ticker}_{scenario_scope}",
+    )
+    changes.extend(handle_assumption_table_edit(edited_valuation, original_valuation, VALUATION_ROW_METADATA, scenario_scope, ["Value"]))
+    edited = _apply_valuation_assumption_table(edited, edited_valuation)
+    _append_unique_assumption_changes(ticker, changes)
+
+    row_options = list(DCF_ROW_METADATA.keys()) + list(VALUATION_ROW_METADATA.keys())
+    selected_row = st.selectbox(
+        "Selected row explanation",
+        row_options,
+        format_func=lambda key: (DCF_ROW_METADATA.get(key) or VALUATION_ROW_METADATA.get(key))["label"],
+        key=f"selected_dcf_matrix_row_{ticker}",
+    )
+    explanation_key = (DCF_ROW_METADATA.get(selected_row) or VALUATION_ROW_METADATA.get(selected_row))["explanation_key"]
+    _render_assumption_explanation(explanation_key, profile, f"{scenario_scope} table edit", "User-edited" if changes else _assumption_source(explanation_key, scenario_scope, edited.get(explanation_key), base.get(explanation_key)), calculate_assumption_impact(base, edited, explanation_key, ctx["historicals"], ctx["dataset"].get("market_data", {})))
+    _render_matrix_validation_warnings(edited, ctx.get("historicals"))
+    if st.session_state.get("assumption_update_log"):
+        st.markdown('<div class="pa-section-title">Assumption Change Log</div>', unsafe_allow_html=True)
+        log_df = st.data_editor(
+            pd.DataFrame(st.session_state.get("assumption_update_log", [])),
+            width="stretch",
+            hide_index=True,
+            num_rows="dynamic",
+            key=f"assumption_matrix_log_{ticker}",
+        )
+        st.session_state["assumption_update_log"] = log_df.to_dict("records")
+    return edited
+
+
 def render_assumption_slider(
     key: str,
     current_value: float,
@@ -2459,22 +2713,24 @@ def _assumption_editor(ctx: dict) -> dict:
     with scope_col:
         scenario_scope = st.segmented_control(
             "Which case are you editing?",
-            ["User Case", "Base Case", "Bull Case", "Bear Case"],
+            ["User Case", "Base Case", "Bull Case", "Bear Case", "Market-Implied Case"],
             default="User Case",
-            help="Choose which valuation case your assumption changes apply to. User Case is recommended for personal adjustments. Base/Bull/Bear should only be changed if you want to redefine the scenario framework.",
+            help="Choose which valuation case your assumption changes apply to. User Case is recommended. Market-Implied is read-only.",
         )
         scenario_scope = scenario_scope or "User Case"
     with compare_col:
         compare_to = st.selectbox("Compare assumption changes against", ["Base Case", "Market-Implied Case", "Prior User Case"], index=0)
 
     st.markdown(f'<span class="pa-pill pa-pill-ok">You are editing: {scenario_scope}</span> <span class="pa-pill">Compare: Current {scenario_scope} vs {compare_to}</span>', unsafe_allow_html=True)
-    if scenario_scope != "User Case":
+    if scenario_scope not in {"User Case", "Market-Implied Case"}:
         st.warning("You are editing a core scenario. Consider using User Case unless you intentionally want to redefine the model framework.")
+    if scenario_scope == "Market-Implied Case":
+        st.info("Market-Implied Case is read-only. Use it as a benchmark, then copy a scenario to User Case for edits.")
 
     scenarios = _build_assumption_scenarios(base, st.session_state[user_state_key])
-    working = dict(scenarios[scenario_scope])
     prior_user_case = dict(st.session_state[user_state_key])
     market_case_assumptions = _market_implied_assumptions(reverse or {}, scenarios["Base Case"])
+    working = dict(market_case_assumptions if scenario_scope == "Market-Implied Case" else scenarios[scenario_scope])
 
     preset_cols = st.columns(4)
     if preset_cols[0].button("Reset User Case to Base", key="reset_user_case_to_base"):
@@ -2489,7 +2745,7 @@ def _assumption_editor(ctx: dict) -> dict:
         st.session_state[user_state_key] = dict(scenarios["Bear Case"])
         working = dict(st.session_state[user_state_key])
         st.success("Bear Case copied to User Case.")
-    expanded = preset_cols[3].toggle("Expanded Assumption Workbench", value=True, help="Use a wider, always-visible workbench layout for assumption review.")
+    show_legacy_controls = preset_cols[3].toggle("Show legacy slider controls", value=False, help="Optional. The editable DCF table is the primary assumption workflow.")
 
     st.markdown('<div class="pa-section-title">Valuation Basis</div>', unsafe_allow_html=True)
     basis_default = next((label for label, item in VALUATION_BASIS_OPTIONS.items() if item["mode"] == str(working.get("dcf_mode", "FCFF")).upper()), "NOPAT bridge")
@@ -2505,9 +2761,35 @@ def _assumption_editor(ctx: dict) -> dict:
     )
     working["use_direct_nopat_override"] = direct_nopat_override
 
-    comparison = _scenario_comparison_table(scenarios, reverse, working)
+    use_da_proxy = st.toggle(
+        "Use D&A proxy for Maintenance CAPEX",
+        value=bool(working.get("use_da_as_maintenance_capex_proxy", False)),
+        help="When enabled, maintenance CAPEX follows D&A % revenue. Use this only when maintenance/growth CAPEX is not disclosed.",
+    )
+    working["use_da_as_maintenance_capex_proxy"] = use_da_proxy
+
+    edited = _render_assumption_matrix_workbench(ctx, base, working, scenario_scope, profile)
+    if scenario_scope == "User Case":
+        st.session_state[user_state_key] = dict(edited)
+
+    comparison = _scenario_comparison_table(scenarios, reverse, edited)
     st.markdown('<div class="pa-section-title">Scenario Comparison Mini Table</div>', unsafe_allow_html=True)
     show_table(comparison, "Scenario comparison unavailable.")
+
+    st.markdown('<div class="pa-section-title">Fair Value Impact</div>', unsafe_allow_html=True)
+    base_fv = run_dcf(historicals, market, base).get("fair_value_per_share")
+    edited_fv = run_dcf(historicals, market, edited).get("fair_value_per_share")
+    fv_delta = (edited_fv - base_fv) if edited_fv is not None and base_fv is not None else None
+    metric_row(
+        [
+            ("Base Fair Value", base_fv, "per_share"),
+            ("Edited Fair Value", edited_fv, "per_share"),
+            ("Change vs Base", fv_delta, "per_share"),
+        ]
+    )
+
+    if not show_legacy_controls:
+        return edited
 
     selected_key = st.selectbox(
         "Selected assumption explanation",
@@ -2515,8 +2797,6 @@ def _assumption_editor(ctx: dict) -> dict:
         format_func=lambda key: ASSUMPTION_METADATA[key]["label"],
         help="Pick an assumption to see definition, scope, source, reasonable range, and model impact.",
     )
-
-    edited = dict(working)
     group_keys = {
         group: [key for key in ASSUMPTION_KEYS if ASSUMPTION_METADATA[key]["group"] == group]
         for group in ASSUMPTION_GROUPS
