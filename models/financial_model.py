@@ -373,11 +373,12 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
     adjusted_fcf = row.get("Adjusted FCF")
     sbc = row.get("SBC")
     shares = row.get("Diluted Shares")
+    cogs = -(float(revenue or 0) - float(gross_profit or 0)) if revenue is not None and gross_profit is not None else None
     return {
         "Revenue": revenue,
-        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None,
-        "COGS / Cost of sales": float(revenue or 0) - float(gross_profit or 0) if revenue is not None and gross_profit is not None else None,
-        "COGS % revenue": _safe_div(float(revenue or 0) - float(gross_profit or 0), revenue),
+        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else 0.0,
+        "COGS / Cost of sales": cogs,
+        "COGS % revenue": _safe_div(abs(cogs), revenue),
         "Gross profit": gross_profit,
         "Gross margin %": row.get("Gross Margin"),
         "S&M": None,
@@ -440,11 +441,12 @@ def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_rev
     adjusted_fcf = adjusted_ocf - maintenance_capex if adjusted_ocf is not None and maintenance_capex is not None else None
     sbc = forecast_row.get("SBC")
     shares = forecast_row.get("Diluted Shares")
+    cogs = -(revenue - gross_profit) if revenue is not None and gross_profit is not None else None
     return {
         "Revenue": revenue,
-        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None,
-        "COGS / Cost of sales": revenue - gross_profit if revenue is not None and gross_profit is not None else None,
-        "COGS % revenue": _safe_div(revenue - gross_profit, revenue) if gross_profit is not None else None,
+        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else 0.0,
+        "COGS / Cost of sales": cogs,
+        "COGS % revenue": _safe_div(abs(cogs), revenue) if gross_profit is not None else None,
         "Gross profit": gross_profit,
         "Gross margin %": gross_margin,
         "S&M": sm,

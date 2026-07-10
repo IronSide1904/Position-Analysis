@@ -14,12 +14,20 @@ def _latest(historicals: pd.DataFrame, column: str, default: float = 0.0) -> flo
     return float(value.iloc[-1]) if not value.empty else default
 
 
+def _latest_positive(historicals: pd.DataFrame, column: str, default: float = 0.0) -> float:
+    if historicals is None or historicals.empty or column not in historicals:
+        return default
+    values = pd.to_numeric(historicals[column], errors="coerce").dropna()
+    values = values[values > 0]
+    return float(values.iloc[-1]) if not values.empty else default
+
+
 def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> dict:
     """
     Forecast 5+ years and compute EV, equity value, and fair value per share.
     """
     years = int(assumptions.get("forecast_years", DCF_DEFAULTS["forecast_years"]))
-    revenue = max(_latest(historicals, "Revenue"), 0)
+    revenue = _latest_positive(historicals, "Revenue")
     if revenue <= 0:
         revenue = float(market_data.get("market_cap") or 0) * 0.25
     revenue_cagr = float(assumptions.get("revenue_cagr", 0.08))
@@ -240,7 +248,7 @@ def build_scenario_table(historicals: pd.DataFrame, market_data: dict, base_assu
 
 
 def default_assumptions_from_historicals(historicals: pd.DataFrame, market_data: dict) -> dict:
-    revenue = _latest(historicals, "Revenue")
+    revenue = _latest_positive(historicals, "Revenue")
     gross_margin = _latest(historicals, "Gross Margin", 0.45)
     ebit = _latest(historicals, "EBIT")
     ocf = _latest(historicals, "OCF")

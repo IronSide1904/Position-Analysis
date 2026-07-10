@@ -28,9 +28,11 @@ def test_derive_financial_rows_repairs_zero_revenue_and_adds_change_rows():
     revenue_2024 = derived.loc[derived["Line Item"] == "Revenue", "FY2024A"].iloc[0]
     cogs_pct = derived.loc[derived["Line Item"] == "COGS % revenue", "FY2024A"].iloc[0]
     fcf = derived.loc[derived["Line Item"] == "FCF", "FY2024A"].iloc[0]
+    cogs_2025 = derived.loc[derived["Line Item"] == "COGS / Cost of sales", "FY2025A"].iloc[0]
 
     assert revenue_2024 == 1290.0
     assert round(cogs_pct, 3) == 0.5
+    assert cogs_2025 == -700.0
     assert fcf == 220.0
     assert "Revenue % change" in derived["Line Item"].tolist()
     assert any(row["Line item"] == "Revenue" and row["Period"] == "FY2024A" for row in log)
@@ -84,8 +86,12 @@ def test_time_axis_model_formats_da_as_money_not_raw_number():
     model = build_time_axis_financial_model(historicals, forecast, assumptions)
     display = format_dataframe_for_display(model)
     da_display = display.loc[display["Line Item"] == "D&A", "FY2026E"].iloc[0]
+    cogs_actual = model.loc[model["Line Item"] == "COGS / Cost of sales", "FY2025A"].iloc[0]
+    cogs_forecast = model.loc[model["Line Item"] == "COGS / Cost of sales", "FY2026E"].iloc[0]
 
     assert da_display == "$1.6B"
+    assert cogs_actual < 0
+    assert cogs_forecast < 0
 
 
 def test_company_story_does_not_hallucinate_missing_buzz():

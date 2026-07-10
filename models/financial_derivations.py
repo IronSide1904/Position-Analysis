@@ -149,12 +149,13 @@ def _set(
     confidence: str = "Calculated",
     warning: str = "",
     overwrite_zero: bool = False,
+    overwrite: bool = False,
 ) -> None:
     if value is None or math.isnan(float(value)) or math.isinf(float(value)):
         return
     idx = _ensure_row(table, label, line_item_col)
     existing = _as_float(table.at[idx, period])
-    if existing is not None and not (overwrite_zero and abs(existing) < 1e-12):
+    if existing is not None and not overwrite and not (overwrite_zero and abs(existing) < 1e-12):
         return
     table.at[idx, period] = float(value)
     log.append(
@@ -228,13 +229,26 @@ def derive_financial_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
             )
             revenue = _get(table, "Revenue", period, line_item_col)
 
+        if cogs is not None and cogs > 0:
+            _set(
+                table,
+                "COGS / Cost of sales",
+                period,
+                -abs(cogs),
+                "Normalized cost row to negative sign convention.",
+                log,
+                line_item_col,
+                overwrite=True,
+            )
+            cogs = _get(table, "COGS / Cost of sales", period, line_item_col)
+
         if gross_profit is None and revenue is not None and cogs is not None:
             derived_gp = revenue + cogs if cogs < 0 else revenue - cogs
             _set(table, "Gross profit", period, derived_gp, "Calculated from Revenue and COGS.", log, line_item_col)
             gross_profit = _get(table, "Gross profit", period, line_item_col)
 
         if cogs is None and revenue is not None and gross_profit is not None:
-            _set(table, "COGS / Cost of sales", period, revenue - gross_profit, "Calculated from Revenue - Gross Profit.", log, line_item_col)
+            _set(table, "COGS / Cost of sales", period, -(revenue - gross_profit), "Calculated as negative cost from Revenue - Gross Profit.", log, line_item_col)
             cogs = _get(table, "COGS / Cost of sales", period, line_item_col)
 
         sm = _get(table, "S&M", period, line_item_col)
@@ -390,8 +404,10 @@ def add_percentage_change_rows(
         previous = None
         for period in periods:
             current = _as_float(row.get(period))
-            if previous is None or current is None or abs(previous) < 1e-12:
-                pct_row[period] = None
+            if previous is None:
+                pct_row[period] = 0.0 if current is not None else "n.m."
+            elif current is None or abs(previous) < 1e-12:
+                pct_row[period] = "n.m."
             elif previous < 0 < current or current < 0 < previous:
                 pct_row[period] = "n.m."
             else:

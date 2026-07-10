@@ -1160,6 +1160,20 @@ def _style_financial_model_table(df: pd.DataFrame):
     return df.style.apply(lambda row: [cell_style(value, column) for column, value in row.items()], axis=1)
 
 
+def _format_financial_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    display = format_dataframe_for_display(df)
+    if display is None or display.empty:
+        return display
+    return display.replace({UNAVAILABLE: "n.m.", "Unavailable": "n.m."}).fillna("n.m.")
+
+
+def _show_financial_table(df: pd.DataFrame, empty_message: str = "Financial table unavailable.") -> None:
+    if df is None or df.empty:
+        st.info(empty_message)
+    else:
+        st.dataframe(_format_financial_table_for_display(df), width="stretch", hide_index=True)
+
+
 def _reverse_dcf_comparison_table(reverse: dict, assumptions: dict) -> pd.DataFrame:
     pairs = [
         ("Revenue CAGR", reverse.get("implied_revenue_cagr"), assumptions.get("revenue_cagr"), "pct"),
@@ -3183,7 +3197,7 @@ def _valuation(ctx: dict) -> None:
             "D&A % change",
         ]
         forecast_model_table = model_table[model_table["Line Item"].isin(forecast_rows)][["Line Item", *forecast_period_cols]] if forecast_period_cols else pd.DataFrame()
-        show_table(forecast_model_table, "Forecast unavailable.")
+        _show_financial_table(forecast_model_table, "Forecast unavailable.")
         render_financial_line_chart(
             forecast_model_table,
             "Forecast Table: Selected Line Items",
@@ -3220,7 +3234,7 @@ def _valuation(ctx: dict) -> None:
             "NOPAT margin %",
         ])]
         render_financial_line_chart(operating_table, "Historical Financials / Operating Model: Selected Line Items", key_prefix="valuation_operating")
-        show_table(operating_table)
+        _show_financial_table(operating_table)
     with st.expander("2. Cash Flow / CAPEX / NOPAT", expanded=True):
         cash_flow_table = model_table[model_table["Line Item"].isin([
             "Operating cash flow",
@@ -3246,7 +3260,7 @@ def _valuation(ctx: dict) -> None:
             "Adjusted FCF margin %",
         ])]
         render_financial_line_chart(cash_flow_table, "Cash Flow / CAPEX / NOPAT: Selected Line Items", key_prefix="valuation_cash_flow")
-        show_table(cash_flow_table)
+        _show_financial_table(cash_flow_table)
     with st.expander("3. Forecast Assumptions"):
         show_table(assumptions_table, "Assumptions unavailable.")
         st.subheader("Accounting-Driven Assumption Flags")
@@ -3260,7 +3274,7 @@ def _valuation(ctx: dict) -> None:
             default_items=["Revenue", "NOPAT", "OCF", "Maintenance CAPEX", "Growth CAPEX", "Total CAPEX", "FCF", "FCFF"],
             key_prefix="valuation_dcf_output",
         )
-        show_table(dcf_output_table, "DCF output unavailable.")
+        _show_financial_table(dcf_output_table, "DCF output unavailable.")
         st.subheader("EV to Equity Bridge")
         show_table(dcf_bridge_table, "DCF bridge unavailable.")
     with st.expander("5. Reverse DCF"):
@@ -3313,7 +3327,7 @@ def _financial_reports(ctx: dict) -> None:
             default_items=["Revenue", "Gross profit", "Total OPEX", "Operating cash flow", "NOPAT", "FCF"],
             key_prefix="reports_financial_model",
         )
-        st.dataframe(_style_financial_model_table(format_dataframe_for_display(model_table)), width="stretch", hide_index=True)
+        st.dataframe(_style_financial_model_table(_format_financial_table_for_display(model_table)), width="stretch", hide_index=True)
 
     with st.expander("Row Groups: Operating Model"):
         operating_rows = model_table[model_table["Line Item"].isin([
@@ -3340,7 +3354,7 @@ def _financial_reports(ctx: dict) -> None:
             "EBIT margin %",
         ])]
         render_financial_line_chart(operating_rows, "Financial Reports: Operating Model Lines", key_prefix="reports_operating")
-        show_table(operating_rows)
+        _show_financial_table(operating_rows)
     with st.expander("Row Groups: Cash Flow / CAPEX / SBC"):
         cash_rows = model_table[model_table["Line Item"].isin([
             "Operating cash flow",
@@ -3373,10 +3387,10 @@ def _financial_reports(ctx: dict) -> None:
             "Diluted shares growth %",
         ])]
         render_financial_line_chart(cash_rows, "Financial Reports: Cash Flow / CAPEX Lines", key_prefix="reports_cash_flow")
-        show_table(cash_rows)
+        _show_financial_table(cash_rows)
 
     with st.expander("SBC / Dilution"):
-        show_table(model_table[model_table["Line Item"].isin(["SBC", "SBC % revenue", "SBC % gross profit", "SBC % OCF", "Diluted shares", "Diluted shares growth %"])])
+        _show_financial_table(model_table[model_table["Line Item"].isin(["SBC", "SBC % revenue", "SBC % gross profit", "SBC % OCF", "Diluted shares", "Diluted shares growth %"])])
     with st.expander("How these rows were calculated"):
         show_table(derivation_log, "No derived rows were required for the current model table.")
 

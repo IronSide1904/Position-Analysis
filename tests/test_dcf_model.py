@@ -39,6 +39,20 @@ def test_user_adjusted_assumption_updates_fair_value():
     assert high > low
 
 
+def test_dcf_uses_last_positive_revenue_before_market_cap_fallback():
+    historicals = pd.DataFrame(
+        [
+            {"Period": "FY 2025", "Revenue": 7200.0, "Gross Margin": 0.5, "EBIT": 1200.0, "OCF": 1000.0, "Total CAPEX": 200.0, "Diluted Shares": 100.0},
+            {"Period": "LTM Latest", "Revenue": 0.0, "Gross Margin": 0.5, "EBIT": 1200.0, "OCF": 1000.0, "Total CAPEX": 200.0, "Diluted Shares": 100.0},
+        ]
+    )
+    market = {"price": 10.0, "shares_outstanding": 100.0, "market_cap": 206000.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    result = run_dcf(historicals, market, assumptions)
+
+    assert result["forecast_table"].iloc[0]["Revenue"] == 7200.0 * (1 + assumptions["revenue_cagr"])
+
+
 def test_dcf_forecast_explicitly_models_reinvestment_lines():
     historicals = sample_historicals()
     market = {"price": 10.0, "shares_outstanding": 100.0}
