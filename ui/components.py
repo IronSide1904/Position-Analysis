@@ -8,7 +8,7 @@ import streamlit as st
 from ui.formatting import (
     UNAVAILABLE,
     format_market_summary_value,
-    fmt_dollar_millions,
+    fmt_money as fmt_money_adaptive,
     fmt_multiple,
     fmt_number,
     fmt_percent,
@@ -35,6 +35,9 @@ MONEY_HINTS = {
     "sbc",
     "debt",
     "cash",
+    "d&a",
+    "depreciation",
+    "amortization",
     "price",
     "fair value",
     "buy zone",
@@ -59,7 +62,7 @@ PCT_HINTS = {
 
 
 def fmt_money(value):
-    return fmt_dollar_millions(value)
+    return fmt_money_adaptive(value)
 
 
 def fmt_pct(value):

@@ -42,7 +42,15 @@ from models.dcf_model import (
     default_assumptions_from_historicals,
     run_dcf,
 )
-from models.financial_model import build_ev_to_equity_bridge, build_historical_financial_table, build_source_evidence_table, build_time_axis_financial_model
+from models.company_story import build_company_story_summary
+from models.financial_derivations import add_percentage_change_rows
+from models.financial_model import (
+    build_ev_to_equity_bridge,
+    build_financial_derivation_log,
+    build_historical_financial_table,
+    build_source_evidence_table,
+    build_time_axis_financial_model,
+)
 from models.reverse_dcf import compare_clause_to_reverse_dcf, run_reverse_dcf
 from models.scoring import score_investment
 from models.sotp_model import build_default_segment_data, run_sotp, run_sotp_scenarios, sotp_summary_table
@@ -63,6 +71,7 @@ from ui.charts import (
     scenario_valuation_bar,
 )
 from ui.components import fmt_money, fmt_pct, format_dataframe_for_display, metric_row, show_table, show_warnings
+from ui.financial_charts import render_financial_line_chart
 from ui.design_system import (
     apply_design_system,
     format_short_score,
@@ -534,7 +543,7 @@ def _top_assumption_drivers(assumptions: dict) -> pd.DataFrame:
         {"driver": "NOPAT margin", "value": assumptions.get("nopat_margin"), "why it matters": "Turns revenue into normalized after-tax profit."},
         {"driver": "WACC", "value": assumptions.get("wacc"), "why it matters": "Discounts future cash flows back to today."},
     ]
-    return pd.DataFrame(rows)
+    return add_percentage_change_rows(pd.DataFrame(rows), line_item_col="Metric")
 
 
 def _top_three_drivers(ctx: dict) -> list[str]:
@@ -2284,6 +2293,14 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
     peers = [p.strip().upper() for p in peer_override.split(",") if p.strip()] or default_peers
     can_fetch_peers = fetch_peers and peers and ("yfinance" in dataset.get("sources", []) or bool(peer_override.strip()))
     peer_df = build_peer_comparison(ticker, peers) if can_fetch_peers else pd.DataFrame()
+    company_story = build_company_story_summary(
+        dataset,
+        filing_texts=dataset.get("filing_texts", {}),
+        peers=peer_df,
+        news_items=dataset.get("news_items") or dataset.get("news"),
+        social_buzz=dataset.get("social_buzz"),
+        web_context=dataset.get("web_context"),
+    )
     capex_quality = analyze_capex_ocf_nopat_quality(historicals, clauses)
     leverage = analyze_operating_leverage(historicals, peer_df)
     ma = analyze_ma_strategy(dataset.get("filing_texts", {}), historicals)
@@ -2314,6 +2331,7 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
         "base_dcf": base_dcf,
         "reverse": reverse,
         "peer_df": peer_df,
+        "company_story": company_story,
         "capex_quality": capex_quality,
         "leverage": leverage,
         "ma": ma,
@@ -2683,6 +2701,7 @@ def _valuation(ctx: dict) -> None:
     user_dcf = run_dcf(ctx["historicals"], market, assumptions)
     reverse = run_reverse_dcf(market, ctx["historicals"], assumptions)
     model_table = build_time_axis_financial_model(ctx["historicals"], user_dcf.get("forecast_table"), assumptions)
+    derivation_log = build_financial_derivation_log(model_table)
     dcf_output_table = _dcf_forecast_output_table(user_dcf, assumptions)
     dcf_bridge_table = build_dcf_output_table(user_dcf, assumptions, market)
     reverse_table = build_reverse_dcf_table(reverse, assumptions, market)
@@ -2761,51 +2780,109 @@ def _valuation(ctx: dict) -> None:
         show_table(valuation_summary, "Valuation summary unavailable.")
     with c4:
         st.subheader("Forecast Table")
-        show_table(user_dcf["forecast_table"], "Forecast unavailable.")
+        forecast_period_cols = [col for col in model_table.columns if str(col).endswith(("E", "F"))]
+        forecast_rows = [
+            "Revenue",
+            "Revenue % change",
+            "Gross profit",
+            "Gross profit % change",
+            "Total OPEX",
+            "Total OPEX % change",
+            "EBIT",
+            "EBIT % change",
+            "NOPAT",
+            "NOPAT % change",
+            "Operating cash flow",
+            "Operating cash flow % change",
+            "Maintenance CAPEX",
+            "Maintenance CAPEX % change",
+            "Growth CAPEX",
+            "Growth CAPEX % change",
+            "Total CAPEX",
+            "Total CAPEX % change",
+            "FCF",
+            "FCF % change",
+            "D&A",
+            "D&A % change",
+        ]
+        forecast_model_table = model_table[model_table["Line Item"].isin(forecast_rows)][["Line Item", *forecast_period_cols]] if forecast_period_cols else pd.DataFrame()
+        show_table(forecast_model_table, "Forecast unavailable.")
+        render_financial_line_chart(
+            forecast_model_table,
+            "Forecast Table: Selected Line Items",
+            default_items=["Revenue", "Gross profit", "Total OPEX", "Operating cash flow", "NOPAT", "FCF"],
+            key_prefix="valuation_forecast",
+        )
 
     with st.expander("1. Historical Financials / Operating Model", expanded=True):
-        show_table(model_table[model_table["Line Item"].isin([
+        operating_table = model_table[model_table["Line Item"].isin([
             "Revenue",
+            "Revenue % change",
             "Revenue growth %",
             "COGS / Cost of sales",
+            "COGS / Cost of sales % change",
             "COGS % revenue",
             "Gross profit",
+            "Gross profit % change",
             "Gross margin %",
             "Total OPEX",
+            "Total OPEX % change",
             "OPEX % revenue",
             "EBIT",
+            "EBIT % change",
             "EBIT margin %",
             "D&A",
+            "D&A % change",
             "D&A % revenue",
             "EBITDA",
+            "EBITDA % change",
             "EBITDA margin %",
             "Tax rate",
             "NOPAT",
+            "NOPAT % change",
             "NOPAT margin %",
-        ])])
+        ])]
+        render_financial_line_chart(operating_table, "Historical Financials / Operating Model: Selected Line Items", key_prefix="valuation_operating")
+        show_table(operating_table)
     with st.expander("2. Cash Flow / CAPEX / NOPAT", expanded=True):
-        show_table(model_table[model_table["Line Item"].isin([
+        cash_flow_table = model_table[model_table["Line Item"].isin([
             "Operating cash flow",
+            "Operating cash flow % change",
             "OCF margin %",
             "Adjusted OCF",
+            "Adjusted OCF % change",
             "Adjusted OCF margin %",
             "Maintenance CAPEX",
+            "Maintenance CAPEX % change",
             "Maintenance CAPEX % revenue",
             "Growth CAPEX",
+            "Growth CAPEX % change",
             "Growth CAPEX % revenue",
             "Total CAPEX",
+            "Total CAPEX % change",
             "Total CAPEX % revenue",
             "FCF",
+            "FCF % change",
             "FCF margin %",
             "Adjusted FCF",
+            "Adjusted FCF % change",
             "Adjusted FCF margin %",
-        ])])
+        ])]
+        render_financial_line_chart(cash_flow_table, "Cash Flow / CAPEX / NOPAT: Selected Line Items", key_prefix="valuation_cash_flow")
+        show_table(cash_flow_table)
     with st.expander("3. Forecast Assumptions"):
         show_table(assumptions_table, "Assumptions unavailable.")
         st.subheader("Accounting-Driven Assumption Flags")
         st.caption("These are suggested reviews only. The dashboard does not override your assumptions without confirmation.")
         show_table(accounting_flags, "No accounting-driven assumption flags available.")
     with st.expander("4. DCF Output"):
+        render_financial_line_chart(
+            dcf_output_table,
+            "DCF Scenario Forecast Table: Selected Line Items",
+            line_item_col="Metric",
+            default_items=["Revenue", "NOPAT", "OCF", "Maintenance CAPEX", "Growth CAPEX", "FCFF / FCF"],
+            key_prefix="valuation_dcf_output",
+        )
         show_table(dcf_output_table, "DCF output unavailable.")
         st.subheader("EV to Equity Bridge")
         show_table(dcf_bridge_table, "DCF bridge unavailable.")
@@ -2818,6 +2895,8 @@ def _valuation(ctx: dict) -> None:
         show_table(scenario_table, "Scenario table unavailable.")
     with st.expander("8. Source / Evidence Table"):
         show_table(build_source_evidence_table(ctx["historicals"], ctx["dataset"]), "Source evidence unavailable.")
+    with st.expander("How these rows were calculated"):
+        show_table(derivation_log, "No derived rows were required for the current model table.")
 
 
 def _financial_reports(ctx: dict) -> None:
@@ -2828,6 +2907,7 @@ def _financial_reports(ctx: dict) -> None:
         return
     dcf = run_dcf(historicals, ctx["dataset"].get("market_data", {}), ctx["base_assumptions"])
     model_table = build_time_axis_financial_model(historicals, dcf.get("forecast_table"), ctx["base_assumptions"])
+    derivation_log = build_financial_derivation_log(model_table)
     metric_row(
         [
             ("Latest Revenue", historicals["Revenue"].iloc[-1] if "Revenue" in historicals else None, "money"),
@@ -2850,15 +2930,24 @@ def _financial_reports(ctx: dict) -> None:
     if model_table is None or model_table.empty:
         st.info("Financial model table unavailable.")
     else:
+        render_financial_line_chart(
+            model_table,
+            "Financial Model: Selected Line Items",
+            default_items=["Revenue", "Gross profit", "Total OPEX", "Operating cash flow", "NOPAT", "FCF"],
+            key_prefix="reports_financial_model",
+        )
         st.dataframe(_style_financial_model_table(format_dataframe_for_display(model_table)), width="stretch", hide_index=True)
 
     with st.expander("Row Groups: Operating Model"):
-        show_table(model_table[model_table["Line Item"].isin([
+        operating_rows = model_table[model_table["Line Item"].isin([
             "Revenue",
+            "Revenue % change",
             "Revenue growth %",
             "COGS / Cost of sales",
+            "COGS / Cost of sales % change",
             "COGS % revenue",
             "Gross profit",
+            "Gross profit % change",
             "Gross margin %",
             "S&M",
             "S&M % revenue",
@@ -2867,35 +2956,52 @@ def _financial_reports(ctx: dict) -> None:
             "G&A",
             "G&A % revenue",
             "Total OPEX",
+            "Total OPEX % change",
             "OPEX % revenue",
             "EBIT",
+            "EBIT % change",
             "EBIT margin %",
-        ])])
+        ])]
+        render_financial_line_chart(operating_rows, "Financial Reports: Operating Model Lines", key_prefix="reports_operating")
+        show_table(operating_rows)
     with st.expander("Row Groups: Cash Flow / CAPEX / SBC"):
-        show_table(model_table[model_table["Line Item"].isin([
+        cash_rows = model_table[model_table["Line Item"].isin([
             "Operating cash flow",
+            "Operating cash flow % change",
             "OCF margin %",
             "Adjusted OCF",
+            "Adjusted OCF % change",
             "Adjusted OCF margin %",
             "Maintenance CAPEX",
+            "Maintenance CAPEX % change",
             "Maintenance CAPEX % revenue",
             "Growth CAPEX",
+            "Growth CAPEX % change",
             "Growth CAPEX % revenue",
             "Total CAPEX",
+            "Total CAPEX % change",
             "Total CAPEX % revenue",
             "FCF",
+            "FCF % change",
             "FCF margin %",
             "Adjusted FCF",
+            "Adjusted FCF % change",
             "Adjusted FCF margin %",
             "SBC",
+            "SBC % change",
             "SBC % revenue",
             "SBC % gross profit",
             "Diluted shares",
+            "Diluted shares % change",
             "Diluted shares growth %",
-        ])])
+        ])]
+        render_financial_line_chart(cash_rows, "Financial Reports: Cash Flow / CAPEX Lines", key_prefix="reports_cash_flow")
+        show_table(cash_rows)
 
     with st.expander("SBC / Dilution"):
         show_table(model_table[model_table["Line Item"].isin(["SBC", "SBC % revenue", "SBC % gross profit", "SBC % OCF", "Diluted shares", "Diluted shares growth %"])])
+    with st.expander("How these rows were calculated"):
+        show_table(derivation_log, "No derived rows were required for the current model table.")
 
 
 def _evidence(ctx: dict) -> None:
@@ -3519,6 +3625,7 @@ def _pa11r_snapshot(ctx: dict) -> None:
         ]
     )
     render_status_grid(_analysis_state_cards(ctx))
+    _company_story_context(ctx)
     render_section(
         "Valuation Method Reconciliation",
         "DCF, SOTP, and multiples are separate lenses. The snapshot only accepts the valuation read when they can be reconciled.",
@@ -3543,6 +3650,40 @@ def _pa11r_snapshot(ctx: dict) -> None:
     with st.expander("One-page tear sheet", expanded=False):
         render_tearsheet(_tearsheet_summary(ctx))
         render_copy_summary(_tearsheet_summary(ctx))
+
+
+def _company_story_context(ctx: dict) -> None:
+    story = ctx.get("company_story") or {}
+    render_section(
+        "Company Story & Assumption Context",
+        "Business model context is here to help you decide which DCF assumptions deserve adjustment.",
+        "Business Model",
+    )
+    c1, c2 = st.columns([0.55, 0.45])
+    with c1:
+        st.markdown("**Company Story**")
+        st.write(story.get("business_summary") or "Unavailable")
+        st.markdown("**How They Make Money**")
+        st.write(story.get("how_they_make_money") or "Unavailable")
+    with c2:
+        st.markdown("**Assumption Implications**")
+        implications = story.get("assumption_implications") or []
+        if implications:
+            for item in implications[:5]:
+                st.write(f"- {item.get('assumption')}: {item.get('implication')} Confidence: {item.get('confidence')}.")
+        else:
+            st.write("Unavailable")
+    with st.expander("Show full company story and assumption context", expanded=False):
+        st.markdown("**Product story**")
+        st.write(story.get("product_story") or "Unavailable")
+        st.markdown("**Industry positioning**")
+        st.write(story.get("industry_positioning") or "Unavailable")
+        st.markdown("**Peers**")
+        st.write(story.get("peer_context") or "Unavailable")
+        st.markdown("**Buzz/news context**")
+        st.write(story.get("buzz_context") or "Social/news buzz unavailable.")
+        show_table(pd.DataFrame(story.get("manual_review_questions") or []), "No manual-review questions generated.")
+        show_table(pd.DataFrame({"Sources used": story.get("sources_used") or ["Unavailable"]}), "No story sources available.")
 
 
 def _assumption_update_log_editor(ctx: dict, key_prefix: str = "evidence") -> None:

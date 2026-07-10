@@ -4,6 +4,8 @@ import re
 
 import pandas as pd
 
+from models.financial_derivations import derive_financial_rows
+
 ANNUAL_FORMS = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
 HISTORICAL_COLUMNS = [
     "Period",
@@ -510,7 +512,17 @@ def build_time_axis_financial_model(historicals: pd.DataFrame, forecast_table: p
             rows_by_period[label] = _forecast_model_values(row, assumptions, prior_revenue=prior_revenue, prior_shares=prior_shares)
             prior_revenue = row.get("Revenue")
             prior_shares = row.get("Diluted Shares")
-    return _model_rows_to_table(rows_by_period)
+    table = _model_rows_to_table(rows_by_period)
+    derived, log = derive_financial_rows(table)
+    derived.attrs["derivation_log"] = log
+    return derived
+
+
+def build_financial_derivation_log(model_table: pd.DataFrame) -> pd.DataFrame:
+    log = (model_table.attrs or {}).get("derivation_log") if model_table is not None else None
+    if not log:
+        _derived, log = derive_financial_rows(model_table)
+    return pd.DataFrame(log)
 
 
 def build_ev_to_equity_bridge(market_data: dict, dcf_output: dict, assumptions: dict) -> pd.DataFrame:
