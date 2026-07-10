@@ -100,6 +100,43 @@ def test_company_story_does_not_hallucinate_missing_buzz():
     assert any(item["assumption"] == "Revenue CAGR" for item in story["assumption_implications"])
 
 
+def test_company_story_product_story_prefers_company_description_over_filing_boilerplate():
+    story = build_company_story_summary(
+        {
+            "ticker": "TEST",
+            "company": "Test Corp",
+            "sector": "Technology",
+            "industry": "Data Services",
+            "company_description": "Test Corp provides AI data engineering services and workflow software for enterprise customers.",
+        },
+        filing_texts={"10-K": "UNITED STATES SECURITIES AND EXCHANGE COMMISSION. Cover page and exchange act boilerplate."},
+        peers=pd.DataFrame(),
+    )
+
+    assert "AI data engineering services" in story["product_story"]
+    assert "SECURITIES AND EXCHANGE COMMISSION" not in story["product_story"]
+
+
+def test_company_story_uses_sec_business_section_when_description_missing():
+    filing = """
+    UNITED STATES SECURITIES AND EXCHANGE COMMISSION
+
+    Item 1. Business
+    Test Corp sells labeled data, model evaluation, and enterprise workflow services to large technology customers.
+
+    Item 1A. Risk Factors
+    Demand can change.
+    """
+    story = build_company_story_summary(
+        {"ticker": "TEST", "company": "Test Corp", "sector": "Technology", "industry": "Data Services"},
+        filing_texts={"10-K": filing},
+        peers=pd.DataFrame(),
+    )
+
+    assert "labeled data" in story["product_story"]
+    assert "SECURITIES AND EXCHANGE COMMISSION" not in story["product_story"]
+
+
 def test_company_story_summary_is_compact():
     long_description = " ".join(["This company provides a broad enterprise AI data platform with services and products."] * 30)
     story = build_company_story_summary(

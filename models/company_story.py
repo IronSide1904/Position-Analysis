@@ -5,6 +5,9 @@ from typing import Any
 
 import pandas as pd
 
+from analysis.filing_section_splitter import split_filing_into_sections
+from analysis.filing_text_cleaner import clean_filing_html
+
 
 def _clean_text(value: Any) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
@@ -27,19 +30,38 @@ def _sentences(text: str, limit: int = 2, max_chars: int = 360) -> str:
     return _clip(" ".join(parts[:limit]).strip(), max_chars=max_chars)
 
 
+def _business_section_excerpt(filing_texts: dict | None) -> tuple[str, list[str]]:
+    if not filing_texts:
+        return "", []
+    for preferred in ["10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A", "10-Q", "10-Q/A"]:
+        raw_text = filing_texts.get(preferred)
+        if not raw_text:
+            continue
+        clean = clean_filing_html(raw_text)
+        sections = split_filing_into_sections(clean)
+        for section_name in ["Business", "MD&A"]:
+            section_text = sections.get(section_name)
+            if section_text:
+                return _sentences(section_text, 2, max_chars=360), [f"SEC {preferred} {section_name} section"]
+    return "", []
+
+
 def _filing_excerpt(filing_texts: dict | None) -> tuple[str, list[str]]:
     if not filing_texts:
         return "", []
+    section_excerpt, section_sources = _business_section_excerpt(filing_texts)
+    if section_excerpt:
+        return section_excerpt, section_sources
     sources: list[str] = []
     for preferred in ["10-K", "10-K/A", "20-F", "40-F", "10-Q", "10-Q/A"]:
         text = filing_texts.get(preferred)
         if text:
             sources.append(f"SEC {preferred}")
-            return _sentences(text, 2, max_chars=360), sources
+            return "", sources
     for form, text in filing_texts.items():
         if text:
             sources.append(f"SEC {form}")
-            return _sentences(text, 2, max_chars=360), sources
+            return "", sources
     return "", sources
 
 
@@ -165,7 +187,7 @@ def build_company_story_summary(
     sources_used.extend(peer_sources)
     sources_used.extend(buzz_sources)
 
-    product_story = _clip(filing_summary or description or "Product and service detail unavailable from loaded sources.", 360)
+    product_story = _clip(description or filing_summary or "Product and service detail unavailable from loaded sources.", 360)
     how_money = (
         f"{company} earns revenue through its loaded product/service profile. "
         "Verify product mix, recurring versus transactional revenue, pricing, and customer concentration before changing assumptions."
