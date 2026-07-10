@@ -300,12 +300,14 @@ def apply_design_system() -> None:
         div[data-testid="stTabs"] div[data-baseweb="tab-highlight"] {
             display: none !important;
         }
-        div[data-testid="stTabs"] button[role="tab"],
+        div[data-testid="stTabs"] [role="tab"],
         div[data-testid="stTabs"] button[data-baseweb="tab"] {
             position: relative !important;
             display: inline-flex !important;
             align-items: center !important;
             justify-content: center !important;
+            cursor: pointer !important;
+            pointer-events: auto !important;
             flex: 0 0 auto !important;
             min-height: 3rem !important;
             width: auto !important;
@@ -323,7 +325,7 @@ def apply_design_system() -> None:
                 inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
             transition: background 170ms ease, border-color 170ms ease, box-shadow 170ms ease, transform 170ms ease, color 170ms ease;
         }
-        div[data-testid="stTabs"] button[role="tab"]::before,
+        div[data-testid="stTabs"] [role="tab"]::before,
         div[data-testid="stTabs"] button[data-baseweb="tab"]::before {
             content: "";
             position: absolute;
@@ -334,19 +336,20 @@ def apply_design_system() -> None:
                 linear-gradient(135deg, rgba(34, 211, 238, 0.18), rgba(20, 184, 166, 0.05));
             opacity: 0;
             transition: opacity 170ms ease;
+            pointer-events: none;
         }
-        div[data-testid="stTabs"] button[role="tab"]:hover,
+        div[data-testid="stTabs"] [role="tab"]:hover,
         div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
             color: #F8FAFC !important;
             border-color: rgba(103, 232, 249, 0.48) !important;
             box-shadow: 0 12px 26px rgba(8, 47, 73, 0.30) !important;
             transform: translateY(-1px);
         }
-        div[data-testid="stTabs"] button[role="tab"]:hover::before,
+        div[data-testid="stTabs"] [role="tab"]:hover::before,
         div[data-testid="stTabs"] button[data-baseweb="tab"]:hover::before {
             opacity: 1;
         }
-        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"],
+        div[data-testid="stTabs"] [role="tab"][aria-selected="true"],
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
             color: #FFFFFF !important;
             background: linear-gradient(135deg, #0891B2, #0F766E) !important;
@@ -356,7 +359,7 @@ def apply_design_system() -> None:
                 inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
             transform: translateY(-1px);
         }
-        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"]::after,
+        div[data-testid="stTabs"] [role="tab"][aria-selected="true"]::after,
         div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"]::after {
             content: "";
             position: absolute;
@@ -367,8 +370,9 @@ def apply_design_system() -> None:
             border-radius: 999px;
             background: rgba(240, 253, 250, 0.9);
             box-shadow: 0 0 14px rgba(240, 253, 250, 0.62);
+            pointer-events: none;
         }
-        div[data-testid="stTabs"] button p {
+        div[data-testid="stTabs"] [role="tab"] p {
             color: inherit !important;
             font-size: 0.95rem;
             font-weight: 800 !important;
