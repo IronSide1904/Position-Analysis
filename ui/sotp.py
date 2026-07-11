@@ -28,7 +28,7 @@ from ui.formatting import fmt_percent, fmt_per_share
 
 SOTP_EDITABLE_COLUMNS = [
     "Segment",
-    "Revenue",
+    "Revenue ($B)",
     "Revenue Growth",
     "OCF Margin",
     "NOPAT Margin",
@@ -70,7 +70,9 @@ def _workbench(ctx: dict, key_prefix: str) -> pd.DataFrame:
     if segment_key not in st.session_state:
         st.session_state[segment_key] = base
     st.caption("Segment data unavailable from filings? This manual segment builder stays active so SOTP is never a blank tab.")
-    editor_input = normalize_segment_table(st.session_state[segment_key], ctx.get("base_assumptions", {}))[SOTP_EDITABLE_COLUMNS].copy()
+    normalized = normalize_segment_table(st.session_state[segment_key], ctx.get("base_assumptions", {})).copy()
+    normalized["Revenue ($B)"] = pd.to_numeric(normalized["Revenue"], errors="coerce") / 1e9
+    editor_input = normalized[SOTP_EDITABLE_COLUMNS].copy()
     pct_columns = ["Revenue Growth", "OCF Margin", "NOPAT Margin", "CAPEX % Revenue", "Discount / Premium"]
     for column in pct_columns:
         editor_input[column] = pd.to_numeric(editor_input[column], errors="coerce") * 100
@@ -82,7 +84,7 @@ def _workbench(ctx: dict, key_prefix: str) -> pd.DataFrame:
         column_config={
             "Valuation Method": st.column_config.SelectboxColumn("Valuation Method", options=VALUATION_METHODS),
             "Confidence": st.column_config.SelectboxColumn("Confidence", options=["Low", "Medium", "High", "Manual Review"]),
-            "Revenue": st.column_config.NumberColumn("Revenue", min_value=0.0, step=1_000_000.0, format="$%.0f"),
+            "Revenue ($B)": st.column_config.NumberColumn("Revenue ($B)", min_value=0.0, step=0.1, format="$%.1fB"),
             "Revenue Growth": st.column_config.NumberColumn("Revenue Growth", min_value=-50.0, max_value=100.0, step=1.0, format="%.1f%%"),
             "OCF Margin": st.column_config.NumberColumn("OCF Margin", min_value=-50.0, max_value=100.0, step=1.0, format="%.1f%%"),
             "NOPAT Margin": st.column_config.NumberColumn("NOPAT Margin", min_value=-50.0, max_value=100.0, step=1.0, format="%.1f%%"),
@@ -93,6 +95,8 @@ def _workbench(ctx: dict, key_prefix: str) -> pd.DataFrame:
         key=f"{key_prefix}_sotp_segment_editor",
     )
     model_frame = edited.copy()
+    model_frame["Revenue"] = pd.to_numeric(model_frame["Revenue ($B)"], errors="coerce") * 1e9
+    model_frame = model_frame.drop(columns=["Revenue ($B)"])
     for column in pct_columns:
         model_frame[column] = pd.to_numeric(model_frame[column], errors="coerce") / 100
     st.session_state[segment_key] = normalize_segment_table(model_frame, ctx.get("base_assumptions", {}))

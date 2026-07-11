@@ -405,7 +405,7 @@ def add_percentage_change_rows(
         for period in periods:
             current = _as_float(row.get(period))
             if previous is None:
-                pct_row[period] = 0.0 if current is not None else "n.m."
+                pct_row[period] = None
             elif current is None or abs(previous) < 1e-12:
                 pct_row[period] = "n.m."
             elif previous < 0 < current or current < 0 < previous:

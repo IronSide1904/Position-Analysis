@@ -51,6 +51,7 @@ def test_percentage_change_rows_skip_margin_rows():
     assert "Revenue % change" in with_changes["Line Item"].tolist()
     assert "Gross margin % % change" not in with_changes["Line Item"].tolist()
     assert with_changes.loc[with_changes["Line Item"] == "Revenue % change", "FY2025A"].iloc[0] == 0.25
+    assert pd.isna(with_changes.loc[with_changes["Line Item"] == "Revenue % change", "FY2024A"].iloc[0])
 
 
 def test_time_axis_model_formats_da_as_money_not_raw_number():
@@ -92,6 +93,42 @@ def test_time_axis_model_formats_da_as_money_not_raw_number():
     assert da_display == "$1.6B"
     assert cogs_actual < 0
     assert cogs_forecast < 0
+
+
+def test_time_axis_first_visible_change_uses_hidden_prior_period():
+    historicals = pd.DataFrame(
+        [
+            {"Period": "FY 2020", "Revenue": 80.0, "Gross Profit": 40.0, "Gross Margin": 0.5, "OPEX": 10.0, "EBIT": 30.0, "EBITDA": 32.0, "NOPAT": 24.0, "OCF": 25.0, "Total CAPEX": 5.0, "FCF": 20.0},
+            {"Period": "FY 2021", "Revenue": 100.0, "Gross Profit": 50.0, "Gross Margin": 0.5, "OPEX": 12.0, "EBIT": 38.0, "EBITDA": 40.0, "NOPAT": 30.0, "OCF": 31.0, "Total CAPEX": 6.0, "FCF": 25.0},
+            {"Period": "FY 2022", "Revenue": 110.0, "Gross Profit": 55.0, "Gross Margin": 0.5, "OPEX": 13.0, "EBIT": 42.0, "EBITDA": 44.0, "NOPAT": 33.0, "OCF": 34.0, "Total CAPEX": 7.0, "FCF": 27.0},
+            {"Period": "FY 2023", "Revenue": 121.0, "Gross Profit": 60.5, "Gross Margin": 0.5, "OPEX": 14.0, "EBIT": 46.5, "EBITDA": 49.0, "NOPAT": 36.0, "OCF": 37.0, "Total CAPEX": 7.5, "FCF": 29.5},
+            {"Period": "FY 2024", "Revenue": 133.1, "Gross Profit": 66.55, "Gross Margin": 0.5, "OPEX": 15.0, "EBIT": 51.55, "EBITDA": 54.0, "NOPAT": 40.0, "OCF": 41.0, "Total CAPEX": 8.0, "FCF": 33.0},
+            {"Period": "FY 2025", "Revenue": 146.41, "Gross Profit": 73.205, "Gross Margin": 0.5, "OPEX": 16.0, "EBIT": 57.205, "EBITDA": 60.0, "NOPAT": 45.0, "OCF": 46.0, "Total CAPEX": 9.0, "FCF": 37.0},
+        ]
+    )
+
+    model = build_time_axis_financial_model(historicals, pd.DataFrame(), {"tax_rate": 0.21})
+    revenue_change = model.loc[model["Line Item"] == "Revenue % change", "FY2021A"].iloc[0]
+    gross_profit_change = model.loc[model["Line Item"] == "Gross profit % change", "FY2021A"].iloc[0]
+
+    assert "__prior_period_for_change" not in model.columns
+    assert revenue_change == 0.25
+    assert gross_profit_change == 0.25
+
+
+def test_mixed_object_columns_keep_numeric_formatting():
+    frame = pd.DataFrame(
+        [
+            {"Case": "Base Case", "CAPEX % Revenue": 0.030553079216937677, "Fair Value / Share": 121.7, "Revenue": 312_120_750_000.0},
+            {"Case": "Market-Implied Case", "CAPEX % Revenue": "Not solved", "Fair Value / Share": 315.32, "Revenue": "Not solved"},
+        ]
+    )
+
+    display = format_dataframe_for_display(frame)
+
+    assert display.loc[0, "CAPEX % Revenue"] == "3.1%"
+    assert display.loc[0, "Fair Value / Share"] == "$121.70"
+    assert display.loc[0, "Revenue"] == "$312.1B"
 
 
 def test_company_story_does_not_hallucinate_missing_buzz():

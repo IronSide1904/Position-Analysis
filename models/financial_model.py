@@ -376,7 +376,7 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
     cogs = -(float(revenue or 0) - float(gross_profit or 0)) if revenue is not None and gross_profit is not None else None
     return {
         "Revenue": revenue,
-        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else 0.0,
+        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None,
         "COGS / Cost of sales": cogs,
         "COGS % revenue": _safe_div(abs(cogs), revenue),
         "Gross profit": gross_profit,
@@ -448,7 +448,7 @@ def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_rev
     cogs = -(revenue - gross_profit) if revenue is not None and gross_profit is not None else None
     return {
         "Revenue": revenue,
-        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else 0.0,
+        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None,
         "COGS / Cost of sales": cogs,
         "COGS % revenue": _safe_div(abs(cogs), revenue) if gross_profit is not None else None,
         "Gross profit": gross_profit,
@@ -499,8 +499,12 @@ def build_time_axis_financial_model(historicals: pd.DataFrame, forecast_table: p
     """
     rows_by_period: dict[str, dict] = {}
     actuals = historicals.tail(5).copy() if historicals is not None and not historicals.empty else pd.DataFrame()
-    prior_revenue = None
-    prior_shares = None
+    hidden_prior_label = "__prior_period_for_change"
+    prior_source = historicals.iloc[-6] if historicals is not None and len(historicals) > len(actuals) else None
+    if prior_source is not None:
+        rows_by_period[hidden_prior_label] = _actual_model_values(prior_source, prior_revenue=None, prior_shares=None)
+    prior_revenue = prior_source.get("Revenue") if prior_source is not None else None
+    prior_shares = prior_source.get("Diluted Shares") if prior_source is not None else None
     latest_year = None
     for _, row in actuals.iterrows():
         label = _actual_label(row.get("Period"))
@@ -520,6 +524,8 @@ def build_time_axis_financial_model(historicals: pd.DataFrame, forecast_table: p
             prior_shares = row.get("Diluted Shares")
     table = _model_rows_to_table(rows_by_period)
     derived, log = derive_financial_rows(table)
+    if hidden_prior_label in derived.columns:
+        derived = derived.drop(columns=[hidden_prior_label])
     derived.attrs["derivation_log"] = log
     return derived
 

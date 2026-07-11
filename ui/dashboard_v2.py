@@ -1189,16 +1189,16 @@ def _style_financial_model_table(df: pd.DataFrame):
     def cell_style(_value, column: str):
         text = str(column)
         if text == "Line Item":
-            return "font-weight: 700; color: #0f172a;"
+            return "font-weight: 700; color: #f8fafc; background-color: #0b1220;"
         if "YTD" in text or "LTM" in text:
-            return "background-color: #fff7d6;"
+            return "background-color: rgba(245, 158, 11, 0.16); color: #f8fafc;"
         if text.endswith("E"):
-            return "background-color: #fff7d6;"
+            return "background-color: rgba(245, 158, 11, 0.16); color: #f8fafc;"
         if text.endswith("F"):
-            return "background-color: #eaf4ff;"
+            return "background-color: rgba(96, 165, 250, 0.14); color: #f8fafc;"
         if text.endswith("A"):
-            return "background-color: #f8fafc;"
-        return ""
+            return "background-color: rgba(15, 23, 42, 0.72); color: #f8fafc;"
+        return "color: #f8fafc;"
 
     return df.style.apply(lambda row: [cell_style(value, column) for column, value in row.items()], axis=1)
 
@@ -2333,6 +2333,22 @@ VALUATION_ROW_METADATA = {
 }
 
 
+ASSUMPTION_MODEL_LINE_MAP = {
+    "revenue_cagr": "Revenue growth %",
+    "cogs_pct_revenue": "COGS % revenue",
+    "opex_pct_revenue": "OPEX % revenue",
+    "tax_rate": "Tax rate",
+    "nopat_margin": "NOPAT margin %",
+    "ocf_margin": "OCF margin %",
+    "depreciation_amortization_pct_revenue": "D&A % revenue",
+    "maintenance_capex_pct_revenue": "Maintenance CAPEX % revenue",
+    "growth_capex_pct_revenue": "Growth CAPEX % revenue",
+    "working_capital_pct_revenue": "Working Capital % Revenue",
+    "sbc_pct_revenue": "SBC % revenue",
+    "diluted_share_growth": "Diluted shares growth %",
+}
+
+
 def _latest_model_year(historicals: pd.DataFrame | None) -> int | None:
     if historicals is None or historicals.empty or "Period" not in historicals:
         return None
@@ -2355,14 +2371,40 @@ def _forecast_period_specs(historicals: pd.DataFrame | None, years: int) -> list
     return specs
 
 
+def _model_period_columns(model_table: pd.DataFrame | None) -> list[str]:
+    if model_table is None or model_table.empty:
+        return []
+    return [col for col in model_table.columns if col != "Line Item"]
+
+
+def _model_line_value(model_table: pd.DataFrame | None, line_item: str, period: str):
+    if model_table is None or model_table.empty or "Line Item" not in model_table or period not in model_table:
+        return None
+    rows = model_table[model_table["Line Item"].astype(str).str.lower() == str(line_item).lower()]
+    if rows.empty:
+        return None
+    return rows.iloc[0].get(period)
+
+
+def _period_change(current, previous):
+    try:
+        current = float(current)
+        previous = float(previous)
+    except (TypeError, ValueError):
+        return None
+    if abs(previous) < 1e-12:
+        return None
+    return current / previous - 1
+
+
 def _display_assumption_number(value, unit: str):
     if value is None:
         return None
     if unit == "%":
-        return round(float(value) * 100, 2)
+        return round(float(value) * 100, 1)
     if unit == "years":
         return int(float(value))
-    return round(float(value), 2)
+    return round(float(value), 1)
 
 
 def _internal_assumption_number(value, unit: str):
@@ -2385,15 +2427,45 @@ def _matrix_value_for_key(assumptions: dict, year: int, row_key: str):
     return year_values.get(meta["assumption_key"], assumptions.get(meta["assumption_key"]))
 
 
-def _build_assumption_matrix(assumptions: dict, historicals: pd.DataFrame | None) -> tuple[pd.DataFrame, list[tuple[int, str]]]:
+def _build_assumption_matrix(
+    assumptions: dict,
+    historicals: pd.DataFrame | None,
+    model_table: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, list[tuple[int, str]], list[str]]:
     specs = _forecast_period_specs(historicals, int(assumptions.get("forecast_years", 5) or 5))
+    forecast_labels = [label for _, label in specs]
+    actual_labels = [label for label in _model_period_columns(model_table) if label not in forecast_labels and label != "Terminal"]
     rows = []
     for row_key, meta in DCF_ROW_METADATA.items():
         row = {"Row Key": row_key, "Assumption": meta["label"], "Unit": meta["unit"], "Evidence": meta["source"]}
+        model_line = ASSUMPTION_MODEL_LINE_MAP.get(row_key)
+        for label in actual_labels:
+            actual_value = _display_assumption_number(_model_line_value(model_table, model_line, label), meta["unit"])
+            row[label] = "n.m." if actual_value is None else actual_value
         for year, label in specs:
             row[label] = _display_assumption_number(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
         rows.append(row)
-    return pd.DataFrame(rows), specs
+    ordered_cols = ["Row Key", "Assumption", "Unit", "Evidence", *actual_labels, *forecast_labels]
+    return pd.DataFrame(rows)[ordered_cols], specs, actual_labels
+
+
+def _build_assumption_change_table(assumption_matrix: pd.DataFrame, period_columns: list[str]) -> pd.DataFrame:
+    if assumption_matrix is None or assumption_matrix.empty:
+        return pd.DataFrame()
+    rows = []
+    for _, source in assumption_matrix.iterrows():
+        row = {
+            "Assumption": f"{source.get('Assumption')} % change",
+            "Unit": "%",
+            "Evidence": "Calculated",
+        }
+        previous = None
+        for period in period_columns:
+            current = source.get(period)
+            row[period] = _period_change(current, previous) if previous is not None else None
+            previous = current
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _build_valuation_assumption_table(assumptions: dict) -> pd.DataFrame:
@@ -2510,22 +2582,34 @@ def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFr
 def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, scenario_scope: str, profile: str) -> dict:
     ticker = ctx["dataset"].get("ticker", "default")
     market = ctx["dataset"].get("market_data", {})
+    preview_dcf = run_dcf(ctx["historicals"], market, working)
+    preview_model_table = build_time_axis_financial_model(ctx["historicals"], preview_dcf.get("forecast_table"), working)
     st.markdown('<div class="pa-section-title">Excel-Style DCF Assumption Model</div>', unsafe_allow_html=True)
     st.caption("Edit the forecast assumption rows directly. Percentage rows use human units: enter 8.0 for 8.0%. Actual and calculated output rows stay locked in the model output table.")
-    original_matrix, specs = _build_assumption_matrix(working, ctx.get("historicals"))
+    original_matrix, specs, locked_period_columns = _build_assumption_matrix(working, ctx.get("historicals"), preview_model_table)
     period_columns = [label for _, label in specs]
+    all_period_columns = [*locked_period_columns, *period_columns]
     read_only = scenario_scope == "Market-Implied Case"
     edited_matrix = st.data_editor(
         original_matrix,
         width="stretch",
         height=520,
         hide_index=True,
-        column_config={"Row Key": None},
-        disabled=["Row Key", "Assumption", "Unit", "Evidence", *period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
+        column_config={
+            "Row Key": None,
+            **{label: st.column_config.NumberColumn(label, format="%.1f") for label in period_columns},
+        },
+        disabled=["Row Key", "Assumption", "Unit", "Evidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence", *locked_period_columns],
         key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}",
     )
     changes = handle_assumption_table_edit(edited_matrix, original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns)
     edited = _apply_assumption_matrix(working, edited_matrix, specs)
+
+    assumption_change_table = _build_assumption_change_table(edited_matrix, all_period_columns)
+    if not assumption_change_table.empty:
+        st.markdown("**Assumption % Change by Period (Locked)**")
+        st.caption("This mirrors the model time axis and shows each assumption's period-to-period change. It is calculated, not editable.")
+        _show_financial_table(assumption_change_table, "Assumption change table unavailable.")
 
     val_col, explain_col = st.columns([0.48, 0.52])
     with val_col:

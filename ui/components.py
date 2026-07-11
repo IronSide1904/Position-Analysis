@@ -115,7 +115,7 @@ def _format_cell(value, column_name: str):
         return UNAVAILABLE
     name = str(column_name).replace("_", " ").lower()
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if "per share" in name or "share price" in name or name in {"price", "fair value", "buy price"}:
+        if "per share" in name or "/ share" in name or "share price" in name or name in {"price", "fair value", "buy price"}:
             return fmt_per_share(value)
         if "multiple" in name or name.endswith(" pe") or name.endswith(" p/e"):
             return fmt_multiple(value)
@@ -140,7 +140,7 @@ def format_dataframe_for_display(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     display_df = df.copy()
-    label_col = next((col for col in ["Line Item", "Metric", "metric", "assumption", "field", "driver"] if col in display_df.columns), None)
+    label_col = next((col for col in ["Line Item", "Metric", "metric", "Assumption", "assumption", "field", "driver"] if col in display_df.columns), None)
     if "value" in display_df.columns and label_col:
         display_df["value"] = [
             _format_cell(value, label)
@@ -162,7 +162,7 @@ def format_dataframe_for_display(df: pd.DataFrame) -> pd.DataFrame:
     for col in display_df.select_dtypes(include=["object"]).columns:
         non_null = display_df[col].dropna()
         if len({type(value) for value in non_null}) > 1:
-            display_df[col] = display_df[col].map(lambda value: UNAVAILABLE if _is_missing(value) else str(value))
+            display_df[col] = display_df[col].map(lambda value, name=col: _format_cell(value, name))
         else:
             display_df[col] = display_df[col].map(lambda value: UNAVAILABLE if _is_missing(value) else value)
     return display_df
