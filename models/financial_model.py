@@ -165,6 +165,18 @@ def _latest_from_series(series: pd.Series):
     return series.dropna().iloc[-1] if not series.dropna().empty else None
 
 
+def _float_or_none(value):
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(number):
+        return None
+    return number
+
+
 def _row(
     period: str,
     revenue,
@@ -179,26 +191,26 @@ def _row(
     cash,
     debt,
 ) -> dict:
-    revenue = float(revenue or 0)
-    gross_profit = float(gross_profit or 0)
-    operating_income = float(operating_income or 0)
-    net_income = float(net_income or 0)
-    ocf = float(ocf or 0)
-    capex = abs(float(capex or 0))
-    da = abs(float(da or 0))
-    sbc = float(sbc or 0)
-    shares = float(shares or 0)
-    cash = float(cash or 0)
-    debt = float(debt or 0)
+    revenue = _float_or_none(revenue)
+    gross_profit = _float_or_none(gross_profit)
+    operating_income = _float_or_none(operating_income)
+    net_income = _float_or_none(net_income)
+    ocf = _float_or_none(ocf)
+    capex = abs(_float_or_none(capex)) if _float_or_none(capex) is not None else None
+    da = abs(_float_or_none(da)) if _float_or_none(da) is not None else None
+    sbc = _float_or_none(sbc)
+    shares = _float_or_none(shares)
+    cash = _float_or_none(cash)
+    debt = _float_or_none(debt)
 
-    maintenance_capex = min(capex, da) if da else capex * 0.6
-    growth_capex = max(capex - maintenance_capex, 0)
+    maintenance_capex = min(capex, da) if capex is not None and da is not None else (capex * 0.6 if capex is not None else None)
+    growth_capex = max(capex - maintenance_capex, 0) if capex is not None and maintenance_capex is not None else None
     tax_rate = 0.21
-    nopat = operating_income * (1 - tax_rate)
-    fcf = ocf - capex
+    nopat = operating_income * (1 - tax_rate) if operating_income is not None else None
+    fcf = ocf - capex if ocf is not None and capex is not None else None
     adjusted_ocf = ocf
-    adjusted_fcf = adjusted_ocf - capex
-    opex = max(gross_profit - operating_income, 0) if gross_profit else 0
+    adjusted_fcf = adjusted_ocf - capex if adjusted_ocf is not None and capex is not None else None
+    opex = max(gross_profit - operating_income, 0) if gross_profit is not None and operating_income is not None else None
 
     return {
         "Period": period,
@@ -206,7 +218,7 @@ def _row(
         "Gross Profit": gross_profit,
         "Gross Margin": gross_profit / revenue if revenue else None,
         "OPEX": opex,
-        "EBITDA": operating_income + da,
+        "EBITDA": operating_income + da if operating_income is not None and da is not None else None,
         "EBIT": operating_income,
         "NOPAT": nopat,
         "Net Income": net_income,
@@ -219,7 +231,7 @@ def _row(
         "Adjusted FCF": adjusted_fcf,
         "SBC": sbc,
         "Diluted Shares": shares,
-        "Net Debt": debt - cash,
+        "Net Debt": debt - cash if debt is not None and cash is not None else None,
     }
 
 

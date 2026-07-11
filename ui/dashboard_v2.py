@@ -42,6 +42,7 @@ from models.dcf_model import (
     default_assumptions_from_historicals,
     run_dcf,
 )
+from models.assumption_estimates import run_assumption_sanity_checks
 from models.company_story import build_company_story_summary
 from models.financial_derivations import add_percentage_change_rows
 from models.financial_model import (
@@ -2024,7 +2025,7 @@ def _normalize_assumption_bridge(assumptions: dict, direct_nopat_override: bool 
     normalized["opex_pct_revenue"] = opex
     normalized["operating_margin"] = operating_margin
     normalized.setdefault("use_da_as_maintenance_capex_proxy", bool(normalized.get("depreciation_amortization_pct_revenue")))
-    if normalized.get("use_da_as_maintenance_capex_proxy"):
+    if normalized.get("use_da_as_maintenance_capex_proxy") and normalized.get("maintenance_capex_pct_revenue") is None:
         normalized["maintenance_capex_pct_revenue"] = _assumption_float(
             normalized.get("depreciation_amortization_pct_revenue"),
             _assumption_float(normalized.get("maintenance_capex_pct_revenue"), 0.03),
@@ -2419,6 +2420,7 @@ def _numeric_or_none(value):
 
 def _assumption_actual_value(row_key: str, model_table: pd.DataFrame | None, period: str, assumptions: dict):
     meta = DCF_ROW_METADATA.get(row_key, {})
+    estimate_meta = _estimate_metadata_for_row(assumptions, row_key)
     direct_lines = ASSUMPTION_FALLBACK_LINES.get(row_key) or [ASSUMPTION_MODEL_LINE_MAP.get(row_key)]
     direct_value = _numeric_or_none(_first_model_line_value(model_table, [line for line in direct_lines if line], period))
 
@@ -2432,16 +2434,19 @@ def _assumption_actual_value(row_key: str, model_table: pd.DataFrame | None, per
         maintenance_pct = _assumption_actual_value("maintenance_capex_pct_revenue", model_table, period, assumptions)
         if total_capex_pct is not None and maintenance_pct is not None:
             return max(total_capex_pct - maintenance_pct, 0.0)
-        return _numeric_or_none(assumptions.get("growth_capex_pct_revenue")) or 0.0
+        estimate_value = _numeric_or_none(estimate_meta.get("value"))
+        return estimate_value if estimate_value is not None else _numeric_or_none(assumptions.get("growth_capex_pct_revenue"))
 
     if row_key == "maintenance_capex_pct_revenue":
         da_pct = _numeric_or_none(_model_line_value(model_table, "D&A % revenue", period))
         if da_pct is not None and abs(da_pct) > 1e-12:
             return da_pct
-        return _numeric_or_none(assumptions.get("maintenance_capex_pct_revenue")) or 0.0
+        estimate_value = _numeric_or_none(estimate_meta.get("value"))
+        return estimate_value if estimate_value is not None else _numeric_or_none(assumptions.get("maintenance_capex_pct_revenue"))
 
     if row_key in {"working_capital_pct_revenue", "sbc_pct_revenue", "diluted_share_growth"}:
-        return 0.0
+        estimate_value = _numeric_or_none(estimate_meta.get("value"))
+        return estimate_value if estimate_value is not None else _numeric_or_none(assumptions.get(meta.get("assumption_key")))
 
     if row_key == "cogs_pct_revenue":
         gross_margin = _numeric_or_none(assumptions.get("gross_margin"))
@@ -2491,6 +2496,12 @@ def _matrix_value_for_key(assumptions: dict, year: int, row_key: str):
     return year_values.get(meta["assumption_key"], assumptions.get(meta["assumption_key"]))
 
 
+def _estimate_metadata_for_row(assumptions: dict, row_key: str) -> dict:
+    estimates = assumptions.get("assumption_estimates") or {}
+    item = estimates.get(row_key) or {}
+    return item if isinstance(item, dict) else {}
+
+
 def _build_assumption_matrix(
     assumptions: dict,
     historicals: pd.DataFrame | None,
@@ -2501,15 +2512,61 @@ def _build_assumption_matrix(
     actual_labels = [label for label in _model_period_columns(model_table) if label not in forecast_labels and label != "Terminal"]
     rows = []
     for row_key, meta in DCF_ROW_METADATA.items():
-        row = {"Row Key": row_key, "Assumption": meta["label"], "Unit": meta["unit"], "Evidence": meta["source"]}
+        estimate_meta = _estimate_metadata_for_row(assumptions, row_key)
+        row = {
+            "Row Key": row_key,
+            "Assumption": meta["label"],
+            "Unit": meta["unit"],
+            "Evidence": estimate_meta.get("evidence_grade") or meta["source"],
+            "Confidence": estimate_meta.get("confidence") or "Medium",
+        }
         for label in actual_labels:
             actual_value = _display_assumption_number(_assumption_actual_value(row_key, model_table, label, assumptions), meta["unit"])
-            row[label] = 0.0 if actual_value is None and meta["unit"] == "%" else actual_value
+            row[label] = "Manual review" if actual_value is None else actual_value
         for year, label in specs:
             row[label] = _display_assumption_number(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
         rows.append(row)
-    ordered_cols = ["Row Key", "Assumption", "Unit", "Evidence", *actual_labels, *forecast_labels]
+    ordered_cols = ["Row Key", "Assumption", "Unit", "Evidence", "Confidence", *actual_labels, *forecast_labels]
     return pd.DataFrame(rows)[ordered_cols], specs, actual_labels
+
+
+def _diagnostic_value_text(value, unit: str) -> str:
+    if unit == "%":
+        return format_assumption_value(value, "percent")
+    if unit == "x":
+        return format_assumption_value(value, "multiple")
+    if unit == "years":
+        return format_assumption_value(value, "years")
+    return format_assumption_value(value, "decimal")
+
+
+def _assumption_diagnostics_rows(assumptions: dict, selected_row: str, dcf_output: dict | None = None) -> list[dict]:
+    meta = DCF_ROW_METADATA.get(selected_row) or VALUATION_ROW_METADATA.get(selected_row)
+    if not meta:
+        return []
+    estimate_meta = _estimate_metadata_for_row(assumptions, selected_row)
+    value = assumptions.get(meta["assumption_key"])
+    model_impact = {
+        "maintenance_capex_pct_revenue": "Higher maintenance CAPEX lowers FCFF and fair value.",
+        "growth_capex_pct_revenue": "Higher growth CAPEX pressures near-term FCF but may support future growth.",
+        "sbc_pct_revenue": "Higher SBC can dilute per-share value even when adjusted margins look strong.",
+        "working_capital_pct_revenue": "Higher working-capital investment lowers FCFF and cash conversion.",
+        "ocf_margin": "Higher OCF margin raises normalized cash earnings and valuation support.",
+        "nopat_margin": "Higher NOPAT margin raises FCFF and fair value.",
+        "depreciation_amortization_pct_revenue": "D&A affects FCFF and the maintenance CAPEX proxy.",
+    }.get(selected_row, "Assumption changes flow through the DCF output and scenario comparison.")
+    rows = [
+        {"Metric": "Value", "Read": _diagnostic_value_text(value, meta["unit"])},
+        {"Metric": "Method", "Read": estimate_meta.get("method") or _assumption_source(selected_row, "Base Case", value, value)},
+        {"Metric": "Evidence grade", "Read": estimate_meta.get("evidence_grade") or meta["source"]},
+        {"Metric": "Confidence", "Read": estimate_meta.get("confidence") or "Medium"},
+        {"Metric": "Warning", "Read": estimate_meta.get("warning") or ASSUMPTION_METADATA.get(selected_row, {}).get("warning") or "No specific warning."},
+        {"Metric": "Source", "Read": estimate_meta.get("source") or ASSUMPTION_METADATA.get(selected_row, {}).get("default_source") or "Model assumption"},
+        {"Metric": "Model impact", "Read": model_impact},
+    ]
+    if dcf_output and selected_row in {"wacc", "terminal_growth", "terminal_multiple"}:
+        rows.append({"Metric": "Terminal value weight", "Read": fmt_percent(dcf_output.get("terminal_value_weight_pct"))})
+    return rows
 
 
 def _build_assumption_change_table(assumption_matrix: pd.DataFrame, period_columns: list[str]) -> pd.DataFrame:
@@ -2637,6 +2694,21 @@ def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFr
         warnings.append({"Assumption": "SBC % Revenue", "Current Value": format_assumption_value(assumptions.get("sbc_pct_revenue"), "percent"), "Severity": "Medium", "Reason": "SBC above 10% should flag dilution risk.", "Suggested Review": "Check diluted share growth and SBC quality."})
     if (assumptions.get("terminal_multiple") or 0) > 15:
         warnings.append({"Assumption": "Terminal Multiple", "Current Value": format_assumption_value(assumptions.get("terminal_multiple"), "multiple"), "Severity": "Medium", "Reason": "Terminal multiple above 15x requires durable growth or moat evidence.", "Suggested Review": "Review moat score, peer multiples, and terminal value weight."})
+    business_profile = {
+        "profile": assumptions.get("business_profile") or assumptions.get("stock_profile"),
+        "sector": assumptions.get("sector"),
+        "industry": assumptions.get("industry"),
+    }
+    for item in run_assumption_sanity_checks(assumptions, business_profile, {}):
+        warnings.append(
+            {
+                "Assumption": item.get("Metric"),
+                "Current Value": "",
+                "Severity": item.get("Severity", "Medium"),
+                "Reason": item.get("Reason"),
+                "Suggested Review": "Review assumption diagnostics and source evidence.",
+            }
+        )
     if warnings:
         st.markdown('<div class="pa-section-title">Validation Warnings</div>', unsafe_allow_html=True)
         show_table(pd.DataFrame(warnings), "No validation warnings.")
@@ -2662,7 +2734,7 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             "Row Key": None,
             **{label: st.column_config.NumberColumn(label, format="%.1f") for label in period_columns},
         },
-        disabled=["Row Key", "Assumption", "Unit", "Evidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence", *locked_period_columns],
+        disabled=["Row Key", "Assumption", "Unit", "Evidence", "Confidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence", "Confidence", *locked_period_columns],
         key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}",
     )
     changes = handle_assumption_table_edit(edited_matrix, original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns)
@@ -2700,6 +2772,8 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
         )
         explanation_key = (DCF_ROW_METADATA.get(selected_row) or VALUATION_ROW_METADATA.get(selected_row))["explanation_key"]
         _render_assumption_explanation(explanation_key, profile, f"{scenario_scope} table edit", "User-edited" if changes else _assumption_source(explanation_key, scenario_scope, edited.get(explanation_key), base.get(explanation_key)), calculate_assumption_impact(base, edited, explanation_key, ctx["historicals"], market))
+        st.markdown("**Assumption Diagnostics**")
+        show_table(pd.DataFrame(_assumption_diagnostics_rows(edited, selected_row)), "No diagnostics available.")
 
     edited_dcf = run_dcf(ctx["historicals"], market, edited)
     base_dcf = run_dcf(ctx["historicals"], market, base)
@@ -3186,7 +3260,16 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
     historicals = build_historical_financial_table(dataset)
     clauses = extract_relevant_clauses(dataset.get("filing_texts", {}))
     accounting_interpretation = build_accounting_interpretation(dataset, historicals, clauses)
-    base_assumptions = default_assumptions_from_historicals(historicals, dataset.get("market_data", {}))
+    assumption_market_context = {
+        **(dataset.get("market_data", {}) or {}),
+        "sector": dataset.get("sector"),
+        "industry": dataset.get("industry"),
+        "stock_profile": infer_stock_profile(dataset),
+    }
+    base_assumptions = default_assumptions_from_historicals(historicals, assumption_market_context)
+    base_assumptions["sector"] = dataset.get("sector")
+    base_assumptions["industry"] = dataset.get("industry")
+    base_assumptions["stock_profile"] = infer_stock_profile(dataset)
     base_dcf = run_dcf(historicals, dataset.get("market_data", {}), base_assumptions)
     reverse = run_reverse_dcf(dataset.get("market_data", {}), historicals, base_assumptions)
     default_peers = select_peer_candidates(ticker, dataset.get("sector"), dataset.get("industry"))

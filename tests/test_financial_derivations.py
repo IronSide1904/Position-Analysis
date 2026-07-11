@@ -169,9 +169,9 @@ def test_assumption_matrix_fills_historical_proxy_rows():
     assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == 12.0
     assert matrix.loc[matrix["Row Key"] == "maintenance_capex_pct_revenue", "FY2025A"].iloc[0] == 3.0
     assert matrix.loc[matrix["Row Key"] == "growth_capex_pct_revenue", "FY2025A"].iloc[0] == 2.0
-    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == 0.0
+    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == 1.0
     assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2025A"].iloc[0] == 0.0
-    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == 0.0
+    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == 2.0
 
 
 def test_company_story_does_not_hallucinate_missing_buzz():
