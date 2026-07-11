@@ -177,6 +177,49 @@ def _css() -> None:
             color: #5d6978;
             margin-bottom: 0.35rem;
         }
+        .pa-dcf-hero {
+            border: 1px solid rgba(45, 212, 191, 0.45);
+            border-radius: 8px;
+            padding: 0.85rem 1rem;
+            margin: 0.45rem 0 0.8rem 0;
+            background: linear-gradient(135deg, rgba(8, 47, 73, 0.85), rgba(15, 23, 42, 0.92));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 1px rgba(14, 165, 233, 0.08);
+        }
+        .pa-dcf-kicker {
+            color: #99f6e4;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.18rem;
+        }
+        .pa-dcf-title {
+            color: #f8fafc;
+            font-size: 1.45rem;
+            line-height: 1.15;
+            font-weight: 800;
+            margin-bottom: 0.25rem;
+        }
+        .pa-dcf-subtitle {
+            color: #cbd5e1;
+            font-size: 0.95rem;
+            line-height: 1.35;
+            margin-bottom: 0.45rem;
+        }
+        .pa-dcf-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+        .pa-dcf-chip {
+            color: #ccfbf1;
+            border: 1px solid rgba(45, 212, 191, 0.3);
+            background: rgba(20, 184, 166, 0.12);
+            border-radius: 999px;
+            padding: 0.16rem 0.55rem;
+            font-size: 0.76rem;
+            font-weight: 700;
+        }
         div[data-testid="stAlert"] {
             background: #f8fafc !important;
             color: #182230 !important;
@@ -1733,6 +1776,15 @@ VALUATION_BASIS_OPTIONS = {
 
 
 TAB_CONTENT_MAP = {
+    "DCF Model": [
+        "assumption_workbench",
+        "dcf_output",
+        "ev_to_equity_bridge",
+        "reverse_dcf",
+        "scenario_table",
+        "sensitivity_heatmap",
+        "assumption_log",
+    ],
     "Snapshot": [
         "decision_summary",
         "valuation_snapshot",
@@ -4478,8 +4530,22 @@ def _assumption_workbench(ctx: dict, key_prefix: str = "evidence") -> None:
 
 
 def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
-    st.markdown('<div class="pa-section-title">Interactive DCF Model</div>', unsafe_allow_html=True)
-    st.caption("Edit the forecast model table first. Valuation cards and scenario snapshots sit underneath the live DCF cockpit.")
+    st.markdown(
+        """
+        <div class="pa-dcf-hero">
+            <div class="pa-dcf-kicker">Table-first valuation cockpit</div>
+            <div class="pa-dcf-title">DCF Model Workbench</div>
+            <div class="pa-dcf-subtitle">Edit forecast assumptions directly in the model table. Locked output rows recalculate below, so the workflow feels like an Excel DCF inside Streamlit.</div>
+            <div class="pa-dcf-chips">
+                <span class="pa-dcf-chip">Editable forecast assumptions</span>
+                <span class="pa-dcf-chip">Locked calculated output</span>
+                <span class="pa-dcf-chip">Live fair-value impact</span>
+                <span class="pa-dcf-chip">CAPEX / OPEX / OCF / SBC visible</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     market = ctx["dataset"].get("market_data", {})
     dcf = ctx["base_dcf"]
     reverse = ctx["reverse"]
@@ -4642,8 +4708,8 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
     show_warnings(_critical_warnings(dataset.get("warnings", [])))
     tabs = st.tabs(
         [
+            "DCF Model",
             "Snapshot",
-            "Valuation & DCF",
             "Financials & Reinvestment",
             "Evidence & Assumptions",
             "Business Quality & Risks",
@@ -4651,9 +4717,9 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
         ]
     )
     with tabs[0]:
-        _pa11r_snapshot(ctx)
-    with tabs[1]:
         _pa11r_valuation_tab(ctx, analyst_details)
+    with tabs[1]:
+        _pa11r_snapshot(ctx)
     with tabs[2]:
         _pa11r_financials_reinvestment_tab(ctx, analyst_details)
     with tabs[3]:

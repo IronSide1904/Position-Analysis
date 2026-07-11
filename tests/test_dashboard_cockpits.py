@@ -7,8 +7,8 @@ def test_pa11r_cockpit_tabs_render():
 
     assert len(app.exception) == 0
     expected = [
+        "DCF Model",
         "Snapshot",
-        "Valuation & DCF",
         "Financials & Reinvestment",
         "Evidence & Assumptions",
         "Business Quality & Risks",
