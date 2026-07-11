@@ -341,11 +341,21 @@ def _year_from_period(period: str) -> int | None:
 
 
 def _safe_div(numerator, denominator):
+    if numerator is None or denominator is None:
+        return None
     try:
-        denominator = float(denominator or 0)
-        return float(numerator or 0) / denominator if denominator else None
+        denominator = float(denominator)
+        return float(numerator) / denominator if denominator else None
     except Exception:
         return None
+
+
+def _safe_delta_pct(current, previous):
+    current = _float_or_none(current)
+    previous = _float_or_none(previous)
+    if current is None or previous is None:
+        return None
+    return _safe_div(current - previous, previous)
 
 
 def _actual_label(period: str) -> str:
@@ -373,7 +383,9 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
     gross_profit = row.get("Gross Profit")
     ebit = row.get("EBIT")
     ebitda = row.get("EBITDA")
-    da = max(float(ebitda or 0) - float(ebit or 0), 0)
+    ebit_num = _float_or_none(ebit)
+    ebitda_num = _float_or_none(ebitda)
+    da = max(ebitda_num - ebit_num, 0) if ebitda_num is not None and ebit_num is not None else None
     opex = row.get("OPEX")
     nopat = row.get("NOPAT")
     ocf = row.get("OCF")
@@ -385,12 +397,15 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
     adjusted_fcf = row.get("Adjusted FCF")
     sbc = row.get("SBC")
     shares = row.get("Diluted Shares")
-    cogs = -(float(revenue or 0) - float(gross_profit or 0)) if revenue is not None and gross_profit is not None else None
+    revenue_num = _float_or_none(revenue)
+    gross_profit_num = _float_or_none(gross_profit)
+    cogs = -(revenue_num - gross_profit_num) if revenue_num is not None and gross_profit_num is not None else None
+    nopat_to_ebit = _safe_div(nopat, ebit)
     return {
         "Revenue": revenue,
-        "Revenue growth %": _safe_div(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None,
+        "Revenue growth %": _safe_delta_pct(revenue, prior_revenue),
         "COGS / Cost of sales": cogs,
-        "COGS % revenue": _safe_div(abs(cogs), revenue),
+        "COGS % revenue": _safe_div(abs(cogs), revenue) if cogs is not None else None,
         "Gross profit": gross_profit,
         "Gross margin %": row.get("Gross Margin"),
         "S&M": None,
@@ -407,7 +422,7 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
         "D&A % revenue": _safe_div(da, revenue),
         "EBITDA": ebitda,
         "EBITDA margin %": _safe_div(ebitda, revenue),
-        "Tax rate": 1 - _safe_div(nopat, ebit) if ebit else None,
+        "Tax rate": 1 - nopat_to_ebit if nopat_to_ebit is not None else None,
         "NOPAT": nopat,
         "NOPAT margin %": _safe_div(nopat, revenue),
         "Operating cash flow": ocf,
@@ -429,7 +444,7 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
         "SBC % gross profit": _safe_div(sbc, gross_profit),
         "SBC % OCF": _safe_div(sbc, ocf),
         "Diluted shares": shares,
-        "Diluted shares growth %": _safe_div(float(shares or 0) - float(prior_shares or 0), prior_shares) if prior_shares else None,
+        "Diluted shares growth %": _safe_delta_pct(shares, prior_shares),
     }
 
 

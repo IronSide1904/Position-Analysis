@@ -96,6 +96,23 @@ def test_time_axis_model_formats_da_as_money_not_raw_number():
     assert cogs_forecast < 0
 
 
+def test_time_axis_handles_missing_gross_profit_without_cogs_crash():
+    historicals = pd.DataFrame(
+        [
+            {"Period": "FY 2024", "Revenue": 900.0, "EBIT": 100.0, "OCF": 120.0, "Total CAPEX": 20.0, "Diluted Shares": 100.0},
+            {"Period": "FY 2025", "Revenue": 1000.0, "EBIT": 110.0, "OCF": 130.0, "Total CAPEX": 25.0, "Diluted Shares": 100.0},
+        ]
+    )
+
+    model = build_time_axis_financial_model(historicals, pd.DataFrame(), {"tax_rate": 0.21})
+
+    cogs_pct = model.loc[model["Line Item"] == "COGS % revenue", "FY2025A"].iloc[0]
+    da_pct = model.loc[model["Line Item"] == "D&A % revenue", "FY2025A"].iloc[0]
+
+    assert pd.isna(cogs_pct)
+    assert pd.isna(da_pct)
+
+
 def test_time_axis_first_visible_change_uses_hidden_prior_period():
     historicals = pd.DataFrame(
         [
