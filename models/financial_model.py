@@ -567,17 +567,25 @@ def build_financial_derivation_log(model_table: pd.DataFrame) -> pd.DataFrame:
 def build_ev_to_equity_bridge(market_data: dict, dcf_output: dict, assumptions: dict) -> pd.DataFrame:
     shares = assumptions.get("diluted_shares") or market_data.get("shares_outstanding")
     fair_value = dcf_output.get("fair_value_per_share")
+    cash = market_data.get("cash")
+    debt = market_data.get("debt")
+    net_debt = assumptions.get("net_debt")
+    pv_terminal = dcf_output.get("discounted_terminal_value")
+    enterprise_value = dcf_output.get("enterprise_value")
+    pv_forecast = (enterprise_value - pv_terminal) if enterprise_value is not None and pv_terminal is not None else None
     rows = [
-        {"Metric": "DCF enterprise value", "Value": dcf_output.get("enterprise_value"), "Source": "DCF forecast"},
-        {"Metric": "Net debt / net cash", "Value": assumptions.get("net_debt"), "Source": "SEC / yfinance / model"},
-        {"Metric": "DCF equity value", "Value": dcf_output.get("equity_value"), "Source": "Enterprise value - net debt"},
-        {"Metric": "Diluted shares", "Value": shares, "Source": "SEC / Finviz / yfinance"},
-        {"Metric": "Fair value per share", "Value": fair_value, "Source": "Equity value / diluted shares"},
-        {"Metric": "Current share price", "Value": market_data.get("price"), "Source": "Finviz / yfinance"},
-        {"Metric": "Upside / downside %", "Value": dcf_output.get("upside_downside_pct"), "Source": "Fair value vs current price"},
-        {"Metric": "Margin of safety %", "Value": assumptions.get("margin_of_safety"), "Source": "User assumption"},
-        {"Metric": "Buy price", "Value": dcf_output.get("buy_price_after_margin_of_safety"), "Source": "Fair value x margin of safety"},
-        {"Metric": "Terminal value % of EV", "Value": dcf_output.get("terminal_value_weight_pct"), "Source": "DCF forecast"},
+        {"Metric": "PV of forecast cash flows", "Value": pv_forecast, "Evidence / Source": "DCF forecast years", "Confidence": "Medium"},
+        {"Metric": "PV of terminal value", "Value": pv_terminal, "Evidence / Source": "Discounted terminal value", "Confidence": "Medium"},
+        {"Metric": "Enterprise value", "Value": enterprise_value, "Evidence / Source": "PV forecast cash flows + PV terminal value", "Confidence": "Medium"},
+        {"Metric": "Cash", "Value": cash, "Evidence / Source": "Market data / balance sheet", "Confidence": "Medium" if cash is not None else "Low"},
+        {"Metric": "Debt", "Value": debt, "Evidence / Source": "Market data / balance sheet", "Confidence": "Medium" if debt is not None else "Low"},
+        {"Metric": "Net debt / net cash", "Value": net_debt, "Evidence / Source": "SEC / yfinance / model", "Confidence": "Medium" if net_debt is not None else "Low"},
+        {"Metric": "Equity value", "Value": dcf_output.get("equity_value"), "Evidence / Source": "Enterprise value - net debt", "Confidence": "Medium"},
+        {"Metric": "Diluted shares", "Value": shares, "Evidence / Source": "SEC / Finviz / yfinance", "Confidence": "Medium" if shares else "Low"},
+        {"Metric": "Fair value / share", "Value": fair_value, "Evidence / Source": "Equity value / diluted shares", "Confidence": "Medium" if fair_value is not None else "Low"},
+        {"Metric": "Current price", "Value": market_data.get("price"), "Evidence / Source": "Finviz / yfinance", "Confidence": "Medium" if market_data.get("price") is not None else "Low"},
+        {"Metric": "Upside / downside", "Value": dcf_output.get("upside_downside_pct"), "Evidence / Source": "Fair value vs current price", "Confidence": "Medium"},
+        {"Metric": "MOS buy price", "Value": dcf_output.get("buy_price_after_margin_of_safety"), "Evidence / Source": "Fair value x margin of safety", "Confidence": "Medium"},
     ]
     return pd.DataFrame(rows)
 

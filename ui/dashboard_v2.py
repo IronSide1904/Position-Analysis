@@ -2039,6 +2039,41 @@ def _normalize_assumption_bridge(assumptions: dict, direct_nopat_override: bool 
     return normalized
 
 
+def _bounded_assumption_value(key: str, value):
+    if value is None:
+        return value
+    bounds = {
+        "revenue_cagr": (-0.10, 0.35),
+        "gross_margin": (0.0, 0.95),
+        "opex_pct_revenue": (0.0, 0.80),
+        "ocf_margin": (-0.10, 0.40),
+        "growth_capex_pct_revenue": (0.0, 0.25),
+        "wacc": (0.04, 0.20),
+        "terminal_growth": (0.0, 0.04),
+        "terminal_multiple": (6.0, 25.0),
+    }
+    if key not in bounds:
+        return value
+    low, high = bounds[key]
+    return max(low, min(high, _assumption_float(value)))
+
+
+def _active_assumption_edit_count(base: dict, user: dict | None) -> int:
+    if not user:
+        return 0
+    count = 0
+    for key in ASSUMPTION_KEYS:
+        if key not in base or key not in user:
+            continue
+        if ASSUMPTION_METADATA.get(key, {}).get("unit") == "bool":
+            changed = bool(base.get(key)) != bool(user.get(key))
+        else:
+            changed = abs(_assumption_float(base.get(key)) - _assumption_float(user.get(key))) > 0.000001
+        if changed:
+            count += 1
+    return count
+
+
 def _build_assumption_scenarios(base: dict, user: dict | None = None) -> dict:
     base_case = _normalize_assumption_bridge(base)
     bear = dict(base_case)
@@ -2052,7 +2087,7 @@ def _build_assumption_scenarios(base: dict, user: dict | None = None) -> dict:
         "terminal_growth": -0.01,
         "terminal_multiple": -2.0,
     }.items():
-        bear[key] = _assumption_float(bear.get(key)) + delta
+        bear[key] = _bounded_assumption_value(key, _assumption_float(bear.get(key)) + delta)
     for key, delta in {
         "revenue_cagr": 0.05,
         "gross_margin": 0.03,
@@ -2062,12 +2097,13 @@ def _build_assumption_scenarios(base: dict, user: dict | None = None) -> dict:
         "terminal_growth": 0.01,
         "terminal_multiple": 2.0,
     }.items():
-        bull[key] = _assumption_float(bull.get(key)) + delta
+        bull[key] = _bounded_assumption_value(key, _assumption_float(bull.get(key)) + delta)
+    user_case = dict(base_case) if user is None else dict(user)
     return {
         "Base Case": base_case,
         "Bear Case": _normalize_assumption_bridge(bear),
         "Bull Case": _normalize_assumption_bridge(bull),
-        "User Case": _normalize_assumption_bridge(user or base_case),
+        "User Case": _normalize_assumption_bridge(user_case),
     }
 
 
@@ -2567,6 +2603,7 @@ def _build_assumption_matrix(
     actual_labels = [label for label in _model_period_columns(model_table) if label not in forecast_labels and label != "Terminal"]
     rows = []
     cell_evidence = {}
+    cell_metadata = {}
     for row_key, meta in DCF_ROW_METADATA.items():
         estimate_meta = _estimate_metadata_for_row(assumptions, row_key)
         row_evidence = {}
@@ -2578,6 +2615,13 @@ def _build_assumption_matrix(
             actual_value = _assumption_actual_value(row_key, model_table, label, assumptions)
             evidence = _assumption_actual_evidence(row_key, model_table, label, assumptions)
             cell_evidence[f"{row_key}|{label}"] = evidence
+            cell_metadata[f"{row_key}|{label}"] = {
+                "period_type": "ltm" if label == "LTM Latest" else "actual",
+                "editable": False,
+                "source": evidence.get("source"),
+                "evidence_grade": evidence.get("evidence_grade"),
+                "confidence": evidence.get("confidence"),
+            }
             row_evidence[label] = evidence
             row[label] = _display_assumption_cell(actual_value, meta["unit"])
         for year, label in specs:
@@ -2588,6 +2632,13 @@ def _build_assumption_matrix(
                 "source": "DCF scenario",
             }
             cell_evidence[f"{row_key}|{label}"] = evidence
+            cell_metadata[f"{row_key}|{label}"] = {
+                "period_type": "forecast",
+                "editable": True,
+                "source": evidence.get("source"),
+                "evidence_grade": evidence.get("evidence_grade"),
+                "confidence": evidence.get("confidence"),
+            }
             row_evidence[label] = evidence
             row[label] = _display_assumption_cell(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
         evidence_grades = {item["evidence_grade"] for item in row_evidence.values()}
@@ -2598,6 +2649,7 @@ def _build_assumption_matrix(
     ordered_cols = ["Row Key", "Assumption", "Evidence", "Confidence", *actual_labels, *forecast_labels]
     matrix = pd.DataFrame(rows)[ordered_cols]
     matrix.attrs["cell_evidence"] = cell_evidence
+    matrix.attrs["cell_metadata"] = cell_metadata
     return matrix, specs, actual_labels
 
 
@@ -2772,6 +2824,28 @@ def _assumption_matrix_quality_warnings(matrix: pd.DataFrame, actual_labels: lis
     return warnings
 
 
+def _default_model_sanity_warnings(ctx: dict, assumptions: dict, reverse: dict, dcf_output: dict, ev_bridge: pd.DataFrame | None = None) -> list[str]:
+    dataset = ctx.get("dataset", {})
+    profile_text = " ".join(str(dataset.get(key, "")) for key in ["sector", "industry", "company_description"]).lower()
+    warnings = []
+    solves = reverse.get("solves") or {}
+    nopat_solve = solves.get("nopat_margin") or {}
+    if nopat_solve.get("status") == "Outside Range":
+        warnings.append("Reverse DCF implied NOPAT margin is outside the reasonable range.")
+    if "software" in profile_text or "saas" in profile_text:
+        if abs(_assumption_float(assumptions.get("sbc_pct_revenue"))) < 1e-12 and not assumptions.get("_sbc_real_zero"):
+            warnings.append("SBC % Revenue is zero for a software/SaaS profile; confirm SBC is explicitly reported as zero.")
+    if abs(_assumption_float(assumptions.get("maintenance_capex_pct_revenue"))) < 1e-12 and _assumption_float(assumptions.get("total_capex_pct_revenue")) > 0:
+        warnings.append("Maintenance CAPEX is zero while total CAPEX exists; review the maintenance/growth CAPEX split.")
+    if dcf_output.get("terminal_value_weight_pct") and dcf_output.get("terminal_value_weight_pct") > 0.75:
+        warnings.append("Terminal value is more than 75% of enterprise value.")
+    if ev_bridge is not None and not ev_bridge.empty:
+        repeated_year_cols = [col for col in ev_bridge.columns if str(col).startswith("Year ")]
+        if repeated_year_cols:
+            warnings.append("EV bridge still has year columns; bridge should be a single Value column.")
+    return warnings
+
+
 def _append_unique_assumption_changes(ticker: str, changes: list[dict]) -> None:
     if not changes:
         return
@@ -2814,7 +2888,7 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
     market = ctx["dataset"].get("market_data", {})
     preview_dcf = run_dcf(ctx["historicals"], market, working)
     preview_model_table = build_time_axis_financial_model(ctx["historicals"], preview_dcf.get("forecast_table"), working)
-    st.markdown('<div class="pa-section-title">Excel-Style DCF Assumption Model</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pa-section-title">DCF Assumption Matrix</div>', unsafe_allow_html=True)
     st.caption("Edit the forecast assumption rows directly. Percentage rows use human units: enter 8.0 for 8.0%. Actual and calculated output rows stay locked in the model output table.")
     original_matrix, specs, locked_period_columns = _build_assumption_matrix(working, ctx.get("historicals"), preview_model_table)
     period_columns = [label for _, label in specs]
@@ -2877,9 +2951,9 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             ("Upside / Downside", edited_dcf.get("upside_downside_pct"), "pct"),
         ]
     )
-    st.markdown('<div class="pa-section-title">Calculated DCF Output (Locked)</div>', unsafe_allow_html=True)
-    st.caption("These rows recalculate from the editable assumption table above. They are display-only formula outputs, like the locked rows in an Excel model.")
-    _show_financial_table(_dcf_forecast_output_table(edited_dcf, edited, ctx.get("historicals")), "DCF output unavailable.")
+    with st.expander("Calculated DCF Output (Locked)", expanded=False):
+        st.caption("These rows recalculate from the editable assumption table above. They are display-only formula outputs, like the locked rows in an Excel model.")
+        _show_financial_table(_dcf_forecast_output_table(edited_dcf, edited, ctx.get("historicals")), "DCF output unavailable.")
     _render_matrix_validation_warnings(edited, ctx.get("historicals"))
     if st.session_state.get("assumption_update_log"):
         st.markdown('<div class="pa-section-title">Assumption Change Log</div>', unsafe_allow_html=True)
@@ -3115,7 +3189,13 @@ def _assumption_editor(ctx: dict) -> dict:
     scenarios = _build_assumption_scenarios(base, st.session_state[user_state_key])
     prior_user_case = dict(st.session_state[user_state_key])
     market_case_assumptions = _market_implied_assumptions(reverse or {}, scenarios["Base Case"])
-    working = dict(market_case_assumptions if scenario_scope == "Market-Implied Case" else scenarios[scenario_scope])
+    market_case_clean = {key: value for key, value in market_case_assumptions.items() if value is not None}
+    working = _normalize_assumption_bridge({**scenarios["Base Case"], **market_case_clean}) if scenario_scope == "Market-Implied Case" else dict(scenarios[scenario_scope])
+    edit_count = _active_assumption_edit_count(scenarios["Base Case"], st.session_state[user_state_key])
+    if edit_count:
+        st.info(f"User Case includes {edit_count} active assumption edits.")
+    else:
+        st.info("User Case currently equals Base Case. Edit forecast cells to create a custom User Case.")
 
     with st.expander("Scenario reset / copy actions", expanded=False):
         preset_cols = st.columns(3)
@@ -3160,24 +3240,25 @@ def _assumption_editor(ctx: dict) -> dict:
     if scenario_scope == "User Case":
         st.session_state[user_state_key] = dict(edited)
 
-    bottom_col, impact_col = st.columns([0.58, 0.42])
-    with bottom_col:
-        comparison = _scenario_comparison_table(scenarios, reverse, edited)
-        st.markdown('<div class="pa-section-title">Scenario Comparison</div>', unsafe_allow_html=True)
-        show_table(comparison, "Scenario comparison unavailable.")
+    with st.expander("Scenario Comparison and Fair Value Impact", expanded=False):
+        bottom_col, impact_col = st.columns([0.58, 0.42])
+        with bottom_col:
+            comparison = _scenario_comparison_table(scenarios, reverse, edited)
+            st.markdown('<div class="pa-section-title">Scenario Comparison</div>', unsafe_allow_html=True)
+            show_table(comparison, "Scenario comparison unavailable.")
 
-    with impact_col:
-        st.markdown('<div class="pa-section-title">Fair Value Impact</div>', unsafe_allow_html=True)
-        base_fv = run_dcf(historicals, market, base).get("fair_value_per_share")
-        edited_fv = run_dcf(historicals, market, edited).get("fair_value_per_share")
-        fv_delta = (edited_fv - base_fv) if edited_fv is not None and base_fv is not None else None
-        metric_row(
-            [
-                ("Base Fair Value", base_fv, "per_share"),
-                ("Edited Fair Value", edited_fv, "per_share"),
-                ("Change vs Base", fv_delta, "per_share"),
-            ]
-        )
+        with impact_col:
+            st.markdown('<div class="pa-section-title">Fair Value Impact</div>', unsafe_allow_html=True)
+            base_fv = run_dcf(historicals, market, base).get("fair_value_per_share")
+            edited_fv = run_dcf(historicals, market, edited).get("fair_value_per_share")
+            fv_delta = (edited_fv - base_fv) if edited_fv is not None and base_fv is not None else None
+            metric_row(
+                [
+                    ("Base Fair Value", base_fv, "per_share"),
+                    ("Edited Fair Value", edited_fv, "per_share"),
+                    ("Change vs Base", fv_delta, "per_share"),
+                ]
+            )
 
     show_legacy_controls = False
     with st.expander("Optional legacy slider controls", expanded=False):
@@ -3827,28 +3908,34 @@ def _valuation(ctx: dict) -> None:
         )
     show_warnings(user_dcf.get("warnings", []))
     show_warnings(ctx.get("accounting_interpretation", {}).get("warnings", []))
+    sanity_warnings = _default_model_sanity_warnings(ctx, assumptions, reverse, user_dcf, ev_bridge)
+    if sanity_warnings:
+        _notice(f"Default model quality warning: {sanity_warnings[0]}", "warning")
+        if len(sanity_warnings) > 1:
+            _notice(sanity_warnings[1], "warning")
+        with st.expander("Show model sanity checks", expanded=False):
+            show_table(pd.DataFrame({"Check": sanity_warnings}), "No model sanity checks.")
 
-    st.markdown('<div class="pa-section-title">Charts & Detailed Review</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.plotly_chart(fcf_projection_chart(ctx["historicals"], user_dcf["forecast_table"]), width="stretch", key="v2_fcf_projection")
-        st.caption("The line chart compares reported FCF with the forecast generated from the current assumption table.")
-    with c2:
-        st.plotly_chart(reverse_dcf_chart(reverse, assumptions), width="stretch", key="v2_reverse_dcf")
-        st.caption("Reverse DCF compares your revenue CAGR assumption with the growth implied by the current market price.")
+    st.markdown('<div class="pa-section-title">EV to Equity Bridge Summary</div>', unsafe_allow_html=True)
+    show_table(ev_bridge, "EV bridge unavailable.")
+
+    with st.expander("Charts & Detailed Review", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(fcf_projection_chart(ctx["historicals"], user_dcf["forecast_table"]), width="stretch", key="v2_fcf_projection")
+            st.caption("The line chart compares reported FCF with the forecast generated from the current assumption table.")
+        with c2:
+            st.plotly_chart(reverse_dcf_chart(reverse, assumptions), width="stretch", key="v2_reverse_dcf")
+            st.caption("Reverse DCF compares your revenue CAGR assumption with the growth implied by the current market price.")
 
     sensitivity = build_dcf_sensitivity_table(
         {**assumptions, "historicals": ctx["historicals"], "market_data": market},
         [0.075, 0.085, 0.095, 0.105, 0.115],
         [0.01, 0.02, 0.03, 0.04],
     )
-    st.plotly_chart(dcf_sensitivity_heatmap(sensitivity), width="stretch", key="v2_sensitivity")
-    st.caption("Y-axis is WACC / discount rate. X-axis is terminal growth. Each cell is the resulting fair value per share.")
-    c3, c4 = st.columns([0.45, 0.55])
-    with c3:
-        st.subheader("DCF Valuation Summary")
+    with st.expander("DCF Valuation Summary", expanded=False):
         show_table(valuation_summary, "Valuation summary unavailable.")
-    with c4:
+    with st.expander("Detailed Forecast Table", expanded=False):
         st.subheader("Forecast Table")
         forecast_period_cols = [col for col in model_table.columns if str(col).endswith(("E", "F"))]
         forecast_rows = [
@@ -3883,8 +3970,11 @@ def _valuation(ctx: dict) -> None:
             default_items=["Revenue", "Gross profit", "Total OPEX", "Operating cash flow", "NOPAT", "FCF"],
             key_prefix="valuation_forecast",
         )
+    with st.expander("Sensitivity Table", expanded=False):
+        st.plotly_chart(dcf_sensitivity_heatmap(sensitivity), width="stretch", key="v2_sensitivity")
+        st.caption("Y-axis is WACC / discount rate. X-axis is terminal growth. Each cell is the resulting fair value per share.")
 
-    with st.expander("1. Historical Financials / Operating Model", expanded=True):
+    with st.expander("1. Historical Financials / Operating Model", expanded=False):
         operating_table = model_table[model_table["Line Item"].isin([
             "Revenue",
             "Revenue % change",
@@ -3914,7 +4004,7 @@ def _valuation(ctx: dict) -> None:
         ])]
         render_financial_line_chart(operating_table, "Historical Financials / Operating Model: Selected Line Items", key_prefix="valuation_operating")
         _show_financial_table(operating_table)
-    with st.expander("2. Cash Flow / CAPEX / NOPAT", expanded=True):
+    with st.expander("2. Cash Flow / CAPEX / NOPAT", expanded=False):
         cash_flow_table = model_table[model_table["Line Item"].isin([
             "Operating cash flow",
             "Operating cash flow % change",
@@ -3945,7 +4035,7 @@ def _valuation(ctx: dict) -> None:
         st.subheader("Accounting-Driven Assumption Flags")
         st.caption("These are suggested reviews only. The dashboard does not override your assumptions without confirmation.")
         show_table(accounting_flags, "No accounting-driven assumption flags available.")
-    with st.expander("4. DCF Output"):
+    with st.expander("4. Discounted Cash Flow Detail"):
         render_financial_line_chart(
             dcf_output_table,
             "DCF Scenario Forecast Table: Selected Line Items",
@@ -3954,12 +4044,12 @@ def _valuation(ctx: dict) -> None:
             key_prefix="valuation_dcf_output",
         )
         _show_financial_table(dcf_output_table, "DCF output unavailable.")
-        st.subheader("EV to Equity Bridge")
-        show_table(dcf_bridge_table, "DCF bridge unavailable.")
+        st.subheader("Discounted Cash Flow Detail")
+        show_table(dcf_bridge_table, "DCF detail unavailable.")
     with st.expander("5. Reverse DCF"):
         show_table(reverse_table, "Reverse DCF unavailable.")
         st.write(reverse.get("interpretation"))
-    with st.expander("6. EV to Equity Bridge"):
+    with st.expander("6. EV to Equity Bridge Details"):
         show_table(ev_bridge, "EV bridge unavailable.")
     with st.expander("7. Scenario Table"):
         show_table(scenario_table, "Scenario table unavailable.")

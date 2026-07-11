@@ -1,7 +1,8 @@
 import pandas as pd
 
-from models.dcf_model import build_scenario_table, default_assumptions_from_historicals, run_dcf
-from ui.dashboard_v2 import _dcf_forecast_output_table
+from models.dcf_model import build_dcf_output_table, build_scenario_table, default_assumptions_from_historicals, run_dcf
+from models.financial_model import build_ev_to_equity_bridge
+from ui.dashboard_v2 import _build_assumption_scenarios, _active_assumption_edit_count, _dcf_forecast_output_table
 
 
 def sample_historicals():
@@ -126,3 +127,32 @@ def test_dcf_output_table_starts_with_latest_actual_column():
     revenue_row = table[table["Metric"] == "Revenue"].iloc[0]
     assert revenue_row["2025A"] == 1000.0
     assert revenue_row["FY1E"] > revenue_row["2025A"]
+
+
+def test_default_user_case_equals_base_case_until_edits():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    base = default_assumptions_from_historicals(historicals, market)
+
+    scenarios = _build_assumption_scenarios(base, None)
+
+    assert _active_assumption_edit_count(scenarios["Base Case"], scenarios["User Case"]) == 0
+    edited_user = {**scenarios["User Case"], "revenue_cagr": scenarios["Base Case"]["revenue_cagr"] + 0.02}
+    assert _active_assumption_edit_count(scenarios["Base Case"], edited_user) == 1
+
+
+def test_dcf_detail_and_ev_bridge_are_separate_tables():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0, "cash": 25.0, "debt": 125.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    result = run_dcf(historicals, market, assumptions)
+
+    dcf_detail = build_dcf_output_table(result, assumptions, market)
+    bridge = build_ev_to_equity_bridge(market, result, assumptions)
+
+    assert "Bridge" not in dcf_detail.columns
+    assert "Terminal" in dcf_detail.columns
+    assert "Value" in bridge.columns
+    assert "Evidence / Source" in bridge.columns
+    assert not any(str(column).startswith("Year ") for column in bridge.columns)
+    assert {"Enterprise value", "Equity value", "Fair value / share"}.issubset(set(bridge["Metric"]))
