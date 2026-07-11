@@ -149,7 +149,7 @@ def test_mixed_object_columns_keep_numeric_formatting():
     assert display.loc[0, "Revenue"] == "$312.1B"
 
 
-def test_assumption_matrix_fills_historical_proxy_rows():
+def test_assumption_matrix_separates_actuals_from_forecast_assumptions():
     model_table = pd.DataFrame(
         [
             {"Line Item": "Revenue % change", "FY2025A": 0.12, "LTM Latest": 0.0},
@@ -160,12 +160,14 @@ def test_assumption_matrix_fills_historical_proxy_rows():
             {"Line Item": "OCF margin %", "FY2025A": 0.16, "LTM Latest": 0.16},
             {"Line Item": "D&A % revenue", "FY2025A": 0.03, "LTM Latest": 0.03},
             {"Line Item": "Total CAPEX % revenue", "FY2025A": 0.05, "LTM Latest": 0.05},
+            {"Line Item": "SBC % revenue", "FY2025A": 0.04, "LTM Latest": 0.04},
+            {"Line Item": "Diluted shares growth %", "FY2025A": -0.01, "LTM Latest": None},
         ]
     )
     assumptions = {
         "forecast_years": 1,
         "revenue_cagr": 0.08,
-        "gross_margin": 0.47,
+        "gross_margin": 0.45,
         "opex_pct_revenue": 0.15,
         "tax_rate": 0.21,
         "nopat_margin": 0.12,
@@ -183,12 +185,49 @@ def test_assumption_matrix_fills_historical_proxy_rows():
 
     assert not actual_cells.isna().any().any()
     assert "None" not in actual_cells.astype(str).to_string()
-    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == 12.0
-    assert matrix.loc[matrix["Row Key"] == "maintenance_capex_pct_revenue", "FY2025A"].iloc[0] == 3.0
-    assert matrix.loc[matrix["Row Key"] == "growth_capex_pct_revenue", "FY2025A"].iloc[0] == 2.0
-    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == 1.0
-    assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2025A"].iloc[0] == 0.0
-    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == 2.0
+    assert "Unit" not in matrix.columns
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == "12.0%"
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2026E"].iloc[0] == "8.0%"
+    assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2025A"].iloc[0] == "53.0%"
+    assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2026E"].iloc[0] == "55.0%"
+    assert matrix.loc[matrix["Row Key"] == "maintenance_capex_pct_revenue", "FY2025A"].iloc[0] == "3.0%"
+    assert matrix.loc[matrix["Row Key"] == "growth_capex_pct_revenue", "FY2025A"].iloc[0] == "2.0%"
+    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2025A"].iloc[0] == "4.0%"
+    assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2026E"].iloc[0] == "0.0%"
+    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "Evidence"].iloc[0] == "Mixed"
+    assert matrix.attrs["cell_evidence"]["revenue_cagr|FY2025A"]["evidence_grade"] == "Calculated"
+    assert matrix.attrs["cell_evidence"]["revenue_cagr|FY2026E"]["evidence_grade"] == "Scenario-based"
+
+
+def test_assumption_matrix_does_not_backfill_missing_actuals_with_forecast_defaults():
+    model_table = pd.DataFrame(
+        [
+            {"Line Item": "Revenue % change", "FY2025A": None},
+            {"Line Item": "COGS % revenue", "FY2025A": None},
+            {"Line Item": "OPEX % revenue", "FY2025A": None},
+            {"Line Item": "OCF margin %", "FY2025A": None},
+        ]
+    )
+    assumptions = {
+        "forecast_years": 1,
+        "revenue_cagr": 0.08,
+        "gross_margin": 0.45,
+        "opex_pct_revenue": 0.30,
+        "ocf_margin": 0.16,
+    }
+
+    matrix, _, _ = _build_assumption_matrix(assumptions, pd.DataFrame([{"Period": "FY 2025"}]), model_table)
+
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2026E"].iloc[0] == "8.0%"
+    assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2026E"].iloc[0] == "55.0%"
+    assert matrix.loc[matrix["Row Key"] == "opex_pct_revenue", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "opex_pct_revenue", "FY2026E"].iloc[0] == "30.0%"
+    assert matrix.loc[matrix["Row Key"] == "ocf_margin", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "ocf_margin", "FY2026E"].iloc[0] == "16.0%"
 
 
 def test_company_story_does_not_hallucinate_missing_buzz():

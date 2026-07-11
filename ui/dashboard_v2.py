@@ -2358,6 +2358,14 @@ ASSUMPTION_FALLBACK_LINES = {
 }
 
 
+def _matrix_unit_to_assumption_unit(unit: str) -> str:
+    if unit == "%":
+        return "percent"
+    if unit == "x":
+        return "multiple"
+    return unit
+
+
 def _latest_model_year(historicals: pd.DataFrame | None) -> int | None:
     if historicals is None or historicals.empty or "Period" not in historicals:
         return None
@@ -2426,7 +2434,8 @@ def _assumption_actual_value(row_key: str, model_table: pd.DataFrame | None, per
 
     if direct_value is not None:
         if row_key == "depreciation_amortization_pct_revenue" and abs(direct_value) < 1e-12:
-            return _numeric_or_none(assumptions.get(meta.get("assumption_key")))
+            estimate_value = _numeric_or_none(estimate_meta.get("value"))
+            return estimate_value
         return direct_value
 
     if row_key == "growth_capex_pct_revenue":
@@ -2435,24 +2444,57 @@ def _assumption_actual_value(row_key: str, model_table: pd.DataFrame | None, per
         if total_capex_pct is not None and maintenance_pct is not None:
             return max(total_capex_pct - maintenance_pct, 0.0)
         estimate_value = _numeric_or_none(estimate_meta.get("value"))
-        return estimate_value if estimate_value is not None else _numeric_or_none(assumptions.get("growth_capex_pct_revenue"))
+        return estimate_value
 
     if row_key == "maintenance_capex_pct_revenue":
         da_pct = _numeric_or_none(_model_line_value(model_table, "D&A % revenue", period))
         if da_pct is not None and abs(da_pct) > 1e-12:
             return da_pct
         estimate_value = _numeric_or_none(estimate_meta.get("value"))
-        return estimate_value if estimate_value is not None else _numeric_or_none(assumptions.get("maintenance_capex_pct_revenue"))
+        return estimate_value
 
     if row_key in {"working_capital_pct_revenue", "sbc_pct_revenue", "diluted_share_growth"}:
         estimate_value = _numeric_or_none(estimate_meta.get("value"))
-        return estimate_value if estimate_value is not None else _numeric_or_none(assumptions.get(meta.get("assumption_key")))
+        return estimate_value
 
-    if row_key == "cogs_pct_revenue":
-        gross_margin = _numeric_or_none(assumptions.get("gross_margin"))
-        return 1 - gross_margin if gross_margin is not None else None
+    return _numeric_or_none(estimate_meta.get("value"))
 
-    return _numeric_or_none(assumptions.get(meta.get("assumption_key")))
+
+def _assumption_actual_evidence(row_key: str, model_table: pd.DataFrame | None, period: str, assumptions: dict) -> dict:
+    estimate_meta = _estimate_metadata_for_row(assumptions, row_key)
+    direct_lines = ASSUMPTION_FALLBACK_LINES.get(row_key) or [ASSUMPTION_MODEL_LINE_MAP.get(row_key)]
+    direct_value = _numeric_or_none(_first_model_line_value(model_table, [line for line in direct_lines if line], period))
+    if direct_value is not None and not (row_key == "depreciation_amortization_pct_revenue" and abs(direct_value) < 1e-12):
+        grade = "Proxy-based" if row_key == "maintenance_capex_pct_revenue" and "D&A % revenue" in direct_lines else "Calculated"
+        return {
+            "evidence_grade": grade,
+            "method": f"{DCF_ROW_METADATA[row_key]['label']} calculated from reported financial rows",
+            "confidence": "High" if grade == "Calculated" else "Medium",
+            "source": "SEC/yfinance financials",
+        }
+    if row_key == "growth_capex_pct_revenue":
+        total_capex_pct = _numeric_or_none(_model_line_value(model_table, "Total CAPEX % revenue", period))
+        maintenance_pct = _assumption_actual_value("maintenance_capex_pct_revenue", model_table, period, assumptions)
+        if total_capex_pct is not None and maintenance_pct is not None:
+            return {
+                "evidence_grade": "Estimated",
+                "method": "Total CAPEX % revenue less estimated maintenance CAPEX % revenue",
+                "confidence": "Medium",
+                "source": "SEC/yfinance financials + model proxy",
+            }
+    if estimate_meta.get("value") is not None:
+        return {
+            "evidence_grade": estimate_meta.get("evidence_grade") or "Estimated",
+            "method": estimate_meta.get("method") or "Historical estimate used because direct period data was unavailable",
+            "confidence": estimate_meta.get("confidence") or "Low",
+            "source": estimate_meta.get("source") or "Model estimate",
+        }
+    return {
+        "evidence_grade": "Unavailable",
+        "method": "No reliable reported or estimated actual-period value found",
+        "confidence": "Low",
+        "source": "Manual review required",
+    }
 
 
 def _period_change(current, previous):
@@ -2476,9 +2518,22 @@ def _display_assumption_number(value, unit: str):
     return round(float(value), 1)
 
 
+def _display_assumption_cell(value, unit: str) -> str:
+    if value is None:
+        return "n.m."
+    return format_assumption_value(value, _matrix_unit_to_assumption_unit(unit))
+
+
 def _internal_assumption_number(value, unit: str):
     if value is None or value == "":
         return None
+    if isinstance(value, str) and value.strip().lower() in {"n.m.", "manual review", "unavailable", UNAVAILABLE.lower()}:
+        return None
+    if isinstance(value, str) and unit == "years":
+        value = value.strip().lower().replace("years", "").replace("year", "").strip()
+    parsed = _parse_assumption_value(value, _matrix_unit_to_assumption_unit(unit))
+    if parsed is not None:
+        return parsed
     if unit == "%":
         return float(value) / 100
     if unit == "years":
@@ -2511,23 +2566,39 @@ def _build_assumption_matrix(
     forecast_labels = [label for _, label in specs]
     actual_labels = [label for label in _model_period_columns(model_table) if label not in forecast_labels and label != "Terminal"]
     rows = []
+    cell_evidence = {}
     for row_key, meta in DCF_ROW_METADATA.items():
         estimate_meta = _estimate_metadata_for_row(assumptions, row_key)
+        row_evidence = {}
         row = {
             "Row Key": row_key,
             "Assumption": meta["label"],
-            "Unit": meta["unit"],
-            "Evidence": estimate_meta.get("evidence_grade") or meta["source"],
-            "Confidence": estimate_meta.get("confidence") or "Medium",
         }
         for label in actual_labels:
-            actual_value = _display_assumption_number(_assumption_actual_value(row_key, model_table, label, assumptions), meta["unit"])
-            row[label] = "Manual review" if actual_value is None else actual_value
+            actual_value = _assumption_actual_value(row_key, model_table, label, assumptions)
+            evidence = _assumption_actual_evidence(row_key, model_table, label, assumptions)
+            cell_evidence[f"{row_key}|{label}"] = evidence
+            row_evidence[label] = evidence
+            row[label] = _display_assumption_cell(actual_value, meta["unit"])
         for year, label in specs:
-            row[label] = _display_assumption_number(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
+            evidence = {
+                "evidence_grade": "Scenario-based",
+                "method": "Forecast scenario assumption",
+                "confidence": estimate_meta.get("confidence") or "Medium",
+                "source": "DCF scenario",
+            }
+            cell_evidence[f"{row_key}|{label}"] = evidence
+            row_evidence[label] = evidence
+            row[label] = _display_assumption_cell(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
+        evidence_grades = {item["evidence_grade"] for item in row_evidence.values()}
+        confidences = {item["confidence"] for item in row_evidence.values()}
+        row["Evidence"] = evidence_grades.pop() if len(evidence_grades) == 1 else "Mixed"
+        row["Confidence"] = confidences.pop() if len(confidences) == 1 else "Mixed"
         rows.append(row)
-    ordered_cols = ["Row Key", "Assumption", "Unit", "Evidence", "Confidence", *actual_labels, *forecast_labels]
-    return pd.DataFrame(rows)[ordered_cols], specs, actual_labels
+    ordered_cols = ["Row Key", "Assumption", "Evidence", "Confidence", *actual_labels, *forecast_labels]
+    matrix = pd.DataFrame(rows)[ordered_cols]
+    matrix.attrs["cell_evidence"] = cell_evidence
+    return matrix, specs, actual_labels
 
 
 def _diagnostic_value_text(value, unit: str) -> str:
@@ -2596,8 +2667,7 @@ def _build_valuation_assumption_table(assumptions: dict) -> pd.DataFrame:
             {
                 "Row Key": row_key,
                 "Assumption": meta["label"],
-                "Unit": meta["unit"],
-                "Value": _display_assumption_number(value, meta["unit"]),
+                "Value": _display_assumption_cell(value, meta["unit"]),
                 "Evidence": meta["source"],
             }
         )
@@ -2617,10 +2687,9 @@ def handle_assumption_table_edit(edited_df, original_df, row_metadata, scenario_
                 continue
             old_value = original.at[row_key, period]
             new_value = edited.at[row_key, period]
-            try:
-                old_float = float(old_value)
-                new_float = float(new_value)
-            except (TypeError, ValueError):
+            old_float = _internal_assumption_number(old_value, meta["unit"])
+            new_float = _internal_assumption_number(new_value, meta["unit"])
+            if old_float is None or new_float is None:
                 continue
             if abs(old_float - new_float) <= 0.000001:
                 continue
@@ -2677,6 +2746,32 @@ def _apply_valuation_assumption_table(assumptions: dict, edited_table: pd.DataFr
     return _normalize_assumption_bridge(out, bool(out.get("use_direct_nopat_override")))
 
 
+def _assumption_matrix_quality_warnings(matrix: pd.DataFrame, actual_labels: list[str], forecast_labels: list[str]) -> list[str]:
+    if matrix is None or matrix.empty or not actual_labels or not forecast_labels:
+        return []
+    warnings = []
+    for _, row in matrix.iterrows():
+        row_key = row.get("Row Key")
+        meta = DCF_ROW_METADATA.get(row_key)
+        if not meta:
+            continue
+        actual_values = [_internal_assumption_number(row.get(label), meta["unit"]) for label in actual_labels]
+        forecast_values = [_internal_assumption_number(row.get(label), meta["unit"]) for label in forecast_labels]
+        actual_values = [value for value in actual_values if value is not None]
+        forecast_values = [value for value in forecast_values if value is not None]
+        if not actual_values or not forecast_values:
+            continue
+        actual_unique = {round(value, 6) for value in actual_values}
+        forecast_unique = {round(value, 6) for value in forecast_values}
+        if len(actual_unique) == 1 and len(forecast_unique) == 1 and actual_unique == forecast_unique and row.get("Evidence") == "Mixed":
+            warnings.append(f"{meta['label']}: historical actuals match the forecast assumption exactly; review source evidence.")
+        if row_key == "sbc_pct_revenue" and all(abs(value) < 1e-12 for value in actual_values):
+            warnings.append("SBC % Revenue: historical values are zero; confirm SBC is explicitly reported as zero.")
+    if warnings:
+        warnings.insert(0, "Assumption quality warning: some historical values may be missing, estimated, or suspiciously similar to scenario defaults.")
+    return warnings
+
+
 def _append_unique_assumption_changes(ticker: str, changes: list[dict]) -> None:
     if not changes:
         return
@@ -2725,6 +2820,7 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
     period_columns = [label for _, label in specs]
     all_period_columns = [*locked_period_columns, *period_columns]
     read_only = scenario_scope == "Market-Implied Case"
+    quality_warnings = _assumption_matrix_quality_warnings(original_matrix, locked_period_columns, period_columns)
     edited_matrix = st.data_editor(
         original_matrix,
         width="stretch",
@@ -2732,19 +2828,14 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
         hide_index=True,
         column_config={
             "Row Key": None,
-            **{label: st.column_config.NumberColumn(label, format="%.1f") for label in period_columns},
         },
-        disabled=["Row Key", "Assumption", "Unit", "Evidence", "Confidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Unit", "Evidence", "Confidence", *locked_period_columns],
+        disabled=["Row Key", "Assumption", "Evidence", "Confidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Evidence", "Confidence", *locked_period_columns],
         key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}",
     )
+    for warning in quality_warnings:
+        st.warning(warning)
     changes = handle_assumption_table_edit(edited_matrix, original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns)
     edited = _apply_assumption_matrix(working, edited_matrix, specs)
-
-    assumption_change_table = _build_assumption_change_table(edited_matrix, all_period_columns)
-    if not assumption_change_table.empty:
-        st.markdown("**Assumption % Change by Period (Locked)**")
-        st.caption("This mirrors the model time axis and shows each assumption's period-to-period change. It is calculated, not editable.")
-        _show_financial_table(assumption_change_table, "Assumption change table unavailable.")
 
     val_col, explain_col = st.columns([0.48, 0.52])
     with val_col:
@@ -2755,7 +2846,7 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             width="stretch",
             hide_index=True,
             column_config={"Row Key": None},
-            disabled=["Row Key", "Assumption", "Unit", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Unit", "Evidence"],
+            disabled=["Row Key", "Assumption", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Evidence"],
             key=f"dcf_valuation_matrix_{ticker}_{scenario_scope}",
         )
         changes.extend(handle_assumption_table_edit(edited_valuation, original_valuation, VALUATION_ROW_METADATA, scenario_scope, ["Value"]))
