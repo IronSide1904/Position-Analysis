@@ -4,6 +4,7 @@ from models.company_story import build_company_story_summary
 from models.financial_derivations import add_percentage_change_rows, derive_financial_rows, derive_revenue
 from models.financial_model import build_time_axis_financial_model
 from ui.components import format_dataframe_for_display
+from ui.dashboard_v2 import _build_assumption_matrix
 
 
 def test_derive_revenue_uses_sign_aware_cogs():
@@ -129,6 +130,48 @@ def test_mixed_object_columns_keep_numeric_formatting():
     assert display.loc[0, "CAPEX % Revenue"] == "3.1%"
     assert display.loc[0, "Fair Value / Share"] == "$121.70"
     assert display.loc[0, "Revenue"] == "$312.1B"
+
+
+def test_assumption_matrix_fills_historical_proxy_rows():
+    model_table = pd.DataFrame(
+        [
+            {"Line Item": "Revenue % change", "FY2025A": 0.12, "LTM Latest": 0.0},
+            {"Line Item": "COGS % revenue", "FY2025A": 0.53, "LTM Latest": 0.53},
+            {"Line Item": "OPEX % revenue", "FY2025A": 0.15, "LTM Latest": 0.15},
+            {"Line Item": "Tax rate", "FY2025A": 0.21, "LTM Latest": 0.21},
+            {"Line Item": "NOPAT margin %", "FY2025A": 0.12, "LTM Latest": 0.12},
+            {"Line Item": "OCF margin %", "FY2025A": 0.16, "LTM Latest": 0.16},
+            {"Line Item": "D&A % revenue", "FY2025A": 0.03, "LTM Latest": 0.03},
+            {"Line Item": "Total CAPEX % revenue", "FY2025A": 0.05, "LTM Latest": 0.05},
+        ]
+    )
+    assumptions = {
+        "forecast_years": 1,
+        "revenue_cagr": 0.08,
+        "gross_margin": 0.47,
+        "opex_pct_revenue": 0.15,
+        "tax_rate": 0.21,
+        "nopat_margin": 0.12,
+        "ocf_margin": 0.16,
+        "depreciation_amortization_pct_revenue": 0.03,
+        "maintenance_capex_pct_revenue": 0.03,
+        "growth_capex_pct_revenue": 0.02,
+        "working_capital_pct_revenue": 0.01,
+        "sbc_pct_revenue": 0.0,
+        "diluted_share_growth": 0.02,
+    }
+
+    matrix, _, actual_labels = _build_assumption_matrix(assumptions, pd.DataFrame([{"Period": "FY 2025"}]), model_table)
+    actual_cells = matrix[actual_labels]
+
+    assert not actual_cells.isna().any().any()
+    assert "None" not in actual_cells.astype(str).to_string()
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == 12.0
+    assert matrix.loc[matrix["Row Key"] == "maintenance_capex_pct_revenue", "FY2025A"].iloc[0] == 3.0
+    assert matrix.loc[matrix["Row Key"] == "growth_capex_pct_revenue", "FY2025A"].iloc[0] == 2.0
+    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == 0.0
+    assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2025A"].iloc[0] == 0.0
+    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == 0.0
 
 
 def test_company_story_does_not_hallucinate_missing_buzz():

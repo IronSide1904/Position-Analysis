@@ -1077,8 +1077,8 @@ def _assumption_evidence_table(assumptions: dict) -> pd.DataFrame:
         [
             {
                 "assumption": key,
-                "base value": assumptions.get(key),
-                "user value": assumptions.get(key),
+                "base value": format_assumption_value(assumptions.get(key), _assumption_unit(key)),
+                "user value": format_assumption_value(assumptions.get(key), _assumption_unit(key)),
                 "source / evidence": "Historical financials, market data, or user slider",
                 "confidence": "Medium",
                 "linked clause": "",
@@ -2349,6 +2349,14 @@ ASSUMPTION_MODEL_LINE_MAP = {
 }
 
 
+ASSUMPTION_FALLBACK_LINES = {
+    "revenue_cagr": ["Revenue growth %", "Revenue % change"],
+    "maintenance_capex_pct_revenue": ["Maintenance CAPEX % revenue", "D&A % revenue"],
+    "sbc_pct_revenue": ["SBC % revenue"],
+    "diluted_share_growth": ["Diluted shares growth %"],
+}
+
+
 def _latest_model_year(historicals: pd.DataFrame | None) -> int | None:
     if historicals is None or historicals.empty or "Period" not in historicals:
         return None
@@ -2383,7 +2391,63 @@ def _model_line_value(model_table: pd.DataFrame | None, line_item: str, period: 
     rows = model_table[model_table["Line Item"].astype(str).str.lower() == str(line_item).lower()]
     if rows.empty:
         return None
-    return rows.iloc[0].get(period)
+    value = rows.iloc[0].get(period)
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _first_model_line_value(model_table: pd.DataFrame | None, line_items: list[str], period: str):
+    for line_item in line_items:
+        value = _model_line_value(model_table, line_item, period)
+        if value is not None:
+            return value
+    return None
+
+
+def _numeric_or_none(value):
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(number):
+        return None
+    return number
+
+
+def _assumption_actual_value(row_key: str, model_table: pd.DataFrame | None, period: str, assumptions: dict):
+    meta = DCF_ROW_METADATA.get(row_key, {})
+    direct_lines = ASSUMPTION_FALLBACK_LINES.get(row_key) or [ASSUMPTION_MODEL_LINE_MAP.get(row_key)]
+    direct_value = _numeric_or_none(_first_model_line_value(model_table, [line for line in direct_lines if line], period))
+
+    if direct_value is not None:
+        if row_key == "depreciation_amortization_pct_revenue" and abs(direct_value) < 1e-12:
+            return _numeric_or_none(assumptions.get(meta.get("assumption_key")))
+        return direct_value
+
+    if row_key == "growth_capex_pct_revenue":
+        total_capex_pct = _numeric_or_none(_model_line_value(model_table, "Total CAPEX % revenue", period))
+        maintenance_pct = _assumption_actual_value("maintenance_capex_pct_revenue", model_table, period, assumptions)
+        if total_capex_pct is not None and maintenance_pct is not None:
+            return max(total_capex_pct - maintenance_pct, 0.0)
+        return _numeric_or_none(assumptions.get("growth_capex_pct_revenue")) or 0.0
+
+    if row_key == "maintenance_capex_pct_revenue":
+        da_pct = _numeric_or_none(_model_line_value(model_table, "D&A % revenue", period))
+        if da_pct is not None and abs(da_pct) > 1e-12:
+            return da_pct
+        return _numeric_or_none(assumptions.get("maintenance_capex_pct_revenue")) or 0.0
+
+    if row_key in {"working_capital_pct_revenue", "sbc_pct_revenue", "diluted_share_growth"}:
+        return 0.0
+
+    if row_key == "cogs_pct_revenue":
+        gross_margin = _numeric_or_none(assumptions.get("gross_margin"))
+        return 1 - gross_margin if gross_margin is not None else None
+
+    return _numeric_or_none(assumptions.get(meta.get("assumption_key")))
 
 
 def _period_change(current, previous):
@@ -2438,10 +2502,9 @@ def _build_assumption_matrix(
     rows = []
     for row_key, meta in DCF_ROW_METADATA.items():
         row = {"Row Key": row_key, "Assumption": meta["label"], "Unit": meta["unit"], "Evidence": meta["source"]}
-        model_line = ASSUMPTION_MODEL_LINE_MAP.get(row_key)
         for label in actual_labels:
-            actual_value = _display_assumption_number(_model_line_value(model_table, model_line, label), meta["unit"])
-            row[label] = "n.m." if actual_value is None else actual_value
+            actual_value = _display_assumption_number(_assumption_actual_value(row_key, model_table, label, assumptions), meta["unit"])
+            row[label] = 0.0 if actual_value is None and meta["unit"] == "%" else actual_value
         for year, label in specs:
             row[label] = _display_assumption_number(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
         rows.append(row)
