@@ -10,6 +10,11 @@ from analysis.accounting_interpreter import build_accounting_interpretation, bui
 from analysis.capex_ocf_nopat import analyze_capex_ocf_nopat_quality
 from analysis.clauses import extract_relevant_clauses
 from analysis.clause_pipeline import run_clause_extraction_pipeline
+from analysis.evidence_assumption_mapper import (
+    build_assumption_update_from_impact,
+    build_evidence_assumption_impacts,
+    unique_filter_values,
+)
 from analysis.compensation import analyze_compensation_alignment
 from analysis.guidance import analyze_guidance_accuracy
 from analysis.ma_strategy import analyze_ma_strategy
@@ -38,7 +43,6 @@ from models.dcf_model import (
     build_dcf_sensitivity_table,
     build_reverse_dcf_table,
     build_scenario_table,
-    create_pending_assumption_update,
     default_assumptions_from_historicals,
     run_dcf,
 )
@@ -52,7 +56,7 @@ from models.financial_model import (
     build_source_evidence_table,
     build_time_axis_financial_model,
 )
-from models.reverse_dcf import compare_clause_to_reverse_dcf, run_reverse_dcf
+from models.reverse_dcf import run_reverse_dcf
 from models.scoring import score_investment
 from models.sotp_model import build_default_segment_data, run_sotp, run_sotp_scenarios, sotp_summary_table
 from models.multiples_model import calculate_current_multiples, calculate_scenario_implied_multiples, peer_median_multiples, sector_median_multiples
@@ -2883,7 +2887,7 @@ def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFr
         show_table(pd.DataFrame(warnings), "No validation warnings.")
 
 
-def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, scenario_scope: str, profile: str) -> dict:
+def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, scenario_scope: str, profile: str, expanded: bool = False) -> dict:
     ticker = ctx["dataset"].get("ticker", "default")
     market = ctx["dataset"].get("market_data", {})
     preview_dcf = run_dcf(ctx["historicals"], market, working)
@@ -2937,8 +2941,9 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
         )
         explanation_key = (DCF_ROW_METADATA.get(selected_row) or VALUATION_ROW_METADATA.get(selected_row))["explanation_key"]
         _render_assumption_explanation(explanation_key, profile, f"{scenario_scope} table edit", "User-edited" if changes else _assumption_source(explanation_key, scenario_scope, edited.get(explanation_key), base.get(explanation_key)), calculate_assumption_impact(base, edited, explanation_key, ctx["historicals"], market))
-        st.markdown("**Assumption Diagnostics**")
-        show_table(pd.DataFrame(_assumption_diagnostics_rows(edited, selected_row)), "No diagnostics available.")
+        if expanded:
+            st.markdown("**Assumption Diagnostics**")
+            show_table(pd.DataFrame(_assumption_diagnostics_rows(edited, selected_row)), "No diagnostics available.")
 
     edited_dcf = run_dcf(ctx["historicals"], market, edited)
     base_dcf = run_dcf(ctx["historicals"], market, base)
@@ -3158,6 +3163,19 @@ def _apply_active_change_log(base: dict, edited: dict, log_rows: list[dict]) -> 
 
 
 def _assumption_editor(ctx: dict) -> dict:
+    mode_expanded = bool(
+        (ctx.get("analyst_details", False) if isinstance(ctx, dict) else getattr(ctx, "analyst_details", False))
+        or (ctx.get("debug", False) if isinstance(ctx, dict) else getattr(ctx, "debug", False))
+    )
+    expanded = bool(
+        mode_expanded
+        or st.toggle(
+            "Show advanced assumption details",
+            value=bool(st.session_state.get("pa11r_assumption_editor_expanded", False)),
+            key="pa11r_assumption_editor_expanded",
+            help="Show detailed assumption diagnostics, evidence, confidence, and advanced model checks.",
+        )
+    )
     base = _normalize_assumption_bridge(ctx["base_assumptions"])
     market = ctx["dataset"].get("market_data", {})
     historicals = ctx["historicals"]
@@ -3236,7 +3254,7 @@ def _assumption_editor(ctx: dict) -> dict:
         )
         working["use_da_as_maintenance_capex_proxy"] = use_da_proxy
 
-    edited = _render_assumption_matrix_workbench(ctx, base, working, scenario_scope, profile)
+    edited = _render_assumption_matrix_workbench(ctx, base, working, scenario_scope, profile, expanded=expanded)
     if scenario_scope == "User Case":
         st.session_state[user_state_key] = dict(edited)
 
@@ -4593,34 +4611,260 @@ def _filtered_clauses(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _clause_impact_filters(impacts: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
+    filtered = impacts.copy()
+    filter_specs = [
+        ("topic_label", "Topic"),
+        ("model_line_label", "Model Line"),
+        ("assumption_signal", "Assumption Signal"),
+        ("period", "Period"),
+        ("direction", "Direction"),
+        ("confidence", "Confidence"),
+        ("evidence_grade", "Evidence Grade"),
+        ("review_status", "Review Status"),
+    ]
+    cols = st.columns([1] * len(filter_specs))
+    for idx, (column, label) in enumerate(filter_specs):
+        options = ["All", *unique_filter_values(impacts, column)]
+        with cols[idx]:
+            selected = st.selectbox(label, options, key=f"{key_prefix}_{column}_filter")
+        if selected != "All":
+            filtered = filtered[filtered[column].astype(str) == selected]
+    return filtered.reset_index(drop=True)
+
+
+def _evidence_impact_summary_cards(impacts: pd.DataFrame) -> None:
+    log = st.session_state.get("assumption_update_log", [])
+    applied_ids = {item.get("evidence_id") for item in log if item.get("evidence_id")}
+    status_counts = impacts["implied_value_status"].value_counts() if "implied_value_status" in impacts else pd.Series(dtype=int)
+    signal_counts = impacts["assumption_signal"].value_counts() if "assumption_signal" in impacts else pd.Series(dtype=int)
+    needs_review = impacts[
+        impacts["implied_value_status"].isin(["Directional Only", "Unclear"])
+        | impacts["confidence"].isin(["Low", "Manual Review"])
+        | impacts["suggested_action"].isin(["Manual Review", "Needs Source Verification"])
+    ]
+    warning_signals = {
+        "Margin Pressure Warning",
+        "CAPEX Increase Warning",
+        "Near-Term FCF Pressure",
+        "SBC / Dilution Warning",
+        "Risk Increase Warning",
+        "Bear Case Support",
+    }
+    qualitative_signals = max(
+        len(impacts)
+        - int(signal_counts.get("Calculated %", 0))
+        - int(signal_counts.get("Implied Range", 0))
+        - int(signal_counts.get("Estimated Range", 0)),
+        0,
+    )
+    render_status_grid(
+        [
+            {"title": "Calculated impacts", "value": int(status_counts.get("Calculated", 0)), "subtitle": "Exact numeric guidance converted to a DCF assumption.", "status": "supportive"},
+            {"title": "Range impacts", "value": int(status_counts.get("Range", 0)), "subtitle": "Numeric ranges converted to midpoint and range.", "status": "supportive"},
+            {"title": "Estimated Range", "value": int(status_counts.get("Estimated Range", 0)), "subtitle": "Economic estimate from clause context and baseline assumptions.", "status": "info"},
+            {"title": "Qualitative signals", "value": qualitative_signals, "subtitle": "Evidence supports assumption review without a direct percentage.", "status": "neutral"},
+            {"title": "Warning signals", "value": int(sum(signal_counts.get(signal, 0) for signal in warning_signals)), "subtitle": "Rows that point to margin, CAPEX, FCF, SBC, dilution, or risk pressure.", "status": "warning" if int(sum(signal_counts.get(signal, 0) for signal in warning_signals)) else "supportive"},
+            {"title": "Needs Review", "value": len(needs_review), "subtitle": "Qualitative, ambiguous, or source-verification items.", "status": "warning" if len(needs_review) else "supportive"},
+        ],
+        numeric=True,
+    )
+    qualitative_share = float(qualitative_signals) / max(len(impacts), 1)
+    if qualitative_share > 0.5:
+        st.warning("Many clauses are qualitative signals. Numeric guidance may be missing or extraction rules may need review.")
+    if applied_ids:
+        st.caption(f"Applied to User Case / update log: {len(applied_ids)} evidence item(s).")
+
+
+def _evidence_impact_table(impacts: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "topic_label",
+        "evidence_summary",
+        "model_line_label",
+        "assumption_signal",
+        "period",
+        "implied_value_display",
+        "current_dcf_value_display",
+        "delta_display",
+        "confidence",
+        "suggested_action",
+    ]
+    display = impacts[[column for column in columns if column in impacts]].copy()
+    return display.rename(
+        columns={
+            "topic_label": "Topic",
+            "evidence_summary": "Evidence Summary",
+            "model_line_label": "Model Line",
+            "assumption_signal": "Assumption Signal",
+            "period": "Period",
+            "implied_value_display": "Implied Value / Range",
+            "current_dcf_value_display": "Current DCF",
+            "delta_display": "Delta",
+            "confidence": "Confidence",
+            "suggested_action": "Action",
+        }
+    )
+
+
+def _render_selected_evidence_detail(impact: dict, ctx: dict, key_prefix: str) -> None:
+    st.subheader("Selected Evidence Detail / Implied Calculation")
+    detail_cols = st.columns([0.58, 0.42])
+    with detail_cols[0]:
+        st.markdown("**What the company said**")
+        st.write(impact.get("clause_text") or UNAVAILABLE)
+        st.markdown("**Calculation**")
+        st.write(impact.get("calculation") or impact.get("method") or UNAVAILABLE)
+        st.markdown("**Why this model line was selected**")
+        st.write(impact.get("reason") or UNAVAILABLE)
+        st.markdown("**Numeric signals found**")
+        st.json(impact.get("numeric_signals") or {})
+        st.markdown("**Suggested review**")
+        st.write(
+            f"{impact.get('model_line_label')} is {impact.get('implied_value_display')} versus current DCF "
+            f"{impact.get('current_dcf_value_display')} ({impact.get('delta_display')})."
+        )
+        st.caption(impact.get("exact_value_note") or "")
+        if impact.get("warnings"):
+            st.warning(impact.get("warnings"))
+    with detail_cols[1]:
+        show_table(
+            pd.DataFrame(
+                [
+                    {"Field": "Source filing", "Value": impact.get("form") or UNAVAILABLE},
+                    {"Field": "Filing date", "Value": impact.get("filing_date") or UNAVAILABLE},
+                    {"Field": "Section", "Value": impact.get("section") or UNAVAILABLE},
+                    {"Field": "Evidence grade", "Value": impact.get("evidence_grade") or UNAVAILABLE},
+                    {"Field": "Assumption signal", "Value": impact.get("assumption_signal") or UNAVAILABLE},
+                    {"Field": "Signal meaning", "Value": impact.get("assumption_signal_help") or UNAVAILABLE},
+                    {"Field": "Confidence", "Value": impact.get("confidence") or UNAVAILABLE},
+                    {"Field": "Confidence reason", "Value": impact.get("confidence_reason") or UNAVAILABLE},
+                    {"Field": "Extraction method", "Value": impact.get("extraction_method") or UNAVAILABLE},
+                    {"Field": "Base value used", "Value": impact.get("base_value_display") or UNAVAILABLE},
+                    {"Field": "Source URL", "Value": impact.get("source_url") or UNAVAILABLE},
+                ]
+            ),
+            "No evidence detail available.",
+        )
+
+    st.subheader("Apply Evidence to DCF")
+    action_col, case_col, note_col = st.columns([0.24, 0.22, 0.54])
+    with action_col:
+        action = st.selectbox(
+            "Action",
+            ["Apply to User Case", "Use as Bull Case", "Use as Bear Case", "Create Note Only", "Ignore", "Needs Source Verification"],
+            key=f"{key_prefix}_action_{impact.get('evidence_id')}",
+        )
+    default_case = {"Use as Bull Case": "Bull Case", "Use as Bear Case": "Bear Case"}.get(action, "User Case")
+    with case_col:
+        scenario = st.selectbox(
+            "Scenario",
+            ["User Case", "Base Case", "Bull Case", "Bear Case"],
+            index=["User Case", "Base Case", "Bull Case", "Bear Case"].index(default_case),
+            key=f"{key_prefix}_scenario_{impact.get('evidence_id')}",
+            help="Base Case only changes when explicitly selected here.",
+        )
+    with note_col:
+        note = st.text_input("User note", value=impact.get("user_note") or "", key=f"{key_prefix}_note_{impact.get('evidence_id')}")
+
+    disabled = action in {"Ignore"} or (action != "Create Note Only" and impact.get("implied_value") is None)
+    if disabled and action not in {"Ignore"}:
+        st.info("No exact implied value is available. Use Create Note Only or Needs Source Verification for this evidence.")
+    if st.button("Add to assumption update log", key=f"{key_prefix}_apply_{impact.get('evidence_id')}", disabled=disabled):
+        status = "Needs Source Verification" if action == "Needs Source Verification" else "Note Only" if action == "Create Note Only" else "Pending"
+        update = build_assumption_update_from_impact(impact, scenario=scenario, status=status, user_note=note)
+        if action == "Create Note Only":
+            update["new_value"] = None
+        st.session_state.setdefault("assumption_update_log", []).append(update)
+        st.success("Evidence was added to the assumption update log. No DCF case was changed automatically.")
+
+
+def _manual_review_source_plan(impacts: pd.DataFrame) -> pd.DataFrame:
+    if impacts is None or impacts.empty:
+        return pd.DataFrame()
+    needs_review = impacts[
+        impacts["implied_value"].isna()
+        | impacts["confidence"].isin(["Low", "Manual Review"])
+        | impacts["suggested_action"].isin(["Manual Review", "Needs Source Verification", "Create Note / Review Scenario Probability"])
+    ]
+    rows = []
+    for row in needs_review.head(12).to_dict("records"):
+        rows.append(
+            {
+                "Evidence": row.get("evidence_summary"),
+                "Where to verify": row.get("where_to_verify"),
+                "Suggested section": row.get("section") or "Guidance / MD&A / Liquidity",
+                "Search keywords": row.get("search_keywords"),
+                "Source URL": row.get("source_url") or UNAVAILABLE,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _clause_annotation_map(ctx: dict) -> None:
     ticker = ctx["dataset"].get("ticker")
     request_key = f"clause_annotations_requested_{ticker}"
-    st.subheader("Clause Map")
-    st.caption("Default view shows model impact first. Full filing text and assumption review details sit behind expanders.")
-    if not st.session_state.get(request_key):
-        st.info("Fast cockpit data is loaded. Click below to fetch SEC filing text and extract valuation-relevant clauses.")
-        if st.button("Extract clause annotations", type="primary"):
+    st.subheader("Evidence Impact Summary")
+    st.caption("Default view answers which evidence may change the model. The full raw clause table is available below.")
+
+    clause_df = ctx.get("clauses")
+    if st.session_state.get(request_key):
+        with st.spinner("Fetching SEC filing text and extracting clauses..."):
+            deep_dataset = cached_dataset(ticker, include_deep_sec=True)
+            clause_df = run_clause_extraction_pipeline(
+                deep_dataset.get("filing_texts", {}),
+                _filing_metadata(deep_dataset),
+                ticker=deep_dataset.get("ticker"),
+                cik=deep_dataset.get("cik"),
+            )
+    elif clause_df is None or clause_df.empty:
+        st.info("Fast cockpit data is loaded. Click below to fetch SEC filing text and translate valuation-relevant clauses into assumption impacts.")
+        if st.button("Extract evidence impacts", type="primary", key=f"extract_evidence_impacts_{ticker}"):
             st.session_state[request_key] = True
             st.rerun()
         return
 
-    with st.spinner("Fetching SEC filing text and extracting clauses..."):
-        deep_dataset = cached_dataset(ticker, include_deep_sec=True)
-        clause_df = run_clause_extraction_pipeline(
-            deep_dataset.get("filing_texts", {}),
-            _filing_metadata(deep_dataset),
-            ticker=deep_dataset.get("ticker"),
-            cik=deep_dataset.get("cik"),
-        )
-
-    for warning in clause_df.attrs.get("warnings", []):
+    for warning in getattr(clause_df, "attrs", {}).get("warnings", []):
         st.warning(warning)
-    if clause_df.empty:
+    if clause_df is None or clause_df.empty:
         st.info("No relevant clauses found. Manual review may still be required.")
         return
 
-    filtered = _filtered_clauses(clause_df)
+    impacts = build_evidence_assumption_impacts(
+        clause_df,
+        ctx.get("base_assumptions", {}),
+        ctx.get("historicals"),
+        business_profile=ctx.get("company_story"),
+        peer_data=ctx.get("peer_df"),
+    )
+    if impacts.empty:
+        st.info("No model-impacting evidence could be translated from the available clauses.")
+        return
+
+    _evidence_impact_summary_cards(impacts)
+    st.subheader("Top Evidence Impacts")
+    filtered_impacts = _clause_impact_filters(impacts, key_prefix=f"evidence_{ticker}")
+    st.caption("Assumption Signal explains what kind of evidence signal the clause gives: numeric calculation, implied range, qualitative support, or a specific warning to review.")
+    show_table(_evidence_impact_table(filtered_impacts), "No evidence impacts match the selected filters.")
+
+    if filtered_impacts.empty:
+        return
+    row_options = [
+        f"{idx}: {row['topic_label']} -> {row['model_line_label']} | {row.get('assumption_signal') or row['implied_value_display']} | {row['delta_display']}"
+        for idx, row in filtered_impacts.reset_index(drop=True).iterrows()
+    ]
+    selected_label = st.selectbox("Selected evidence impact", row_options, key=f"selected_evidence_impact_{ticker}")
+    selected_pos = int(selected_label.split(":", 1)[0])
+    selected_impact = filtered_impacts.reset_index(drop=True).iloc[selected_pos].to_dict()
+    _render_selected_evidence_detail(selected_impact, ctx, key_prefix=f"evidence_{ticker}")
+
+    log = st.session_state.get("assumption_update_log", [])
+    if log:
+        st.subheader("Pending Assumption Update Log")
+        show_table(pd.DataFrame(log), "No pending assumption updates.")
+
+    st.subheader("Manual Review / Source Search Plan")
+    show_table(_manual_review_source_plan(impacts), "No manual review items from translated evidence.")
+
     full_cols = [
         "topic",
         "subtopic",
@@ -4635,67 +4879,13 @@ def _clause_annotation_map(ctx: dict) -> None:
         "dashboard_action",
         "review_status",
     ]
-    compact_cols = [column for column in ["topic", "model_line_affected", "direction", "confidence", "dashboard_action"] if column in filtered]
-    compact = filtered[compact_cols].copy()
-    if "dashboard_action" in compact:
-        compact["dashboard_action"] = compact["dashboard_action"].astype(str).str.strip().map(
-            lambda value: {
-                "review_dcf": "Review DCF",
-                "flag_risk": "Flag Risk",
-                "manual_review": "Manual Review",
-                "update_scenario": "Update Scenario",
-                "Flag risk": "Flag Risk",
-                "Manual review": "Manual Review",
-                "Update scenario": "Update Scenario",
-            }.get(value, value)
-        )
-    show_table(
-        compact.rename(
-            columns={
-                "topic": "Topic",
-                "model_line_affected": "Model Impact",
-                "direction": "Direction",
-                "confidence": "Confidence",
-                "dashboard_action": "Action",
-            }
-        ),
-        "No clauses match the selected filters.",
-    )
-
-    with st.expander("Show full clause table"):
-        show_table(filtered[[column for column in full_cols if column in filtered]], "No clauses match the selected filters.")
-
-    st.subheader("Review Actions")
-    row_options = [f"{idx}: {row['topic']} -> {row['model_line_affected']}" for idx, row in filtered.reset_index().iterrows()]
-    if not row_options:
-        return
-    selected_label = st.selectbox("Selected clause", row_options)
-    selected_pos = int(selected_label.split(":", 1)[0])
-    selected_row = filtered.reset_index(drop=True).iloc[selected_pos].to_dict()
-    note = st.text_input("User note", key=f"clause_note_{ticker}")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Mark reviewed"):
-            st.success("Marked reviewed placeholder. Persistent review workflow will be added after fetch quality is approved.")
-    with c2:
-        if st.button("Ignore"):
-            st.info("Ignore placeholder. Clause was not removed from source evidence.")
-    with c3:
-        if st.button("Send to DCF assumption log"):
-            update = create_pending_assumption_update({**selected_row, "user_note": note})
-            st.session_state.setdefault("assumption_update_log", []).append(update)
-            st.json(update)
-    comparison = compare_clause_to_reverse_dcf(selected_row, ctx.get("reverse", {}))
-    st.write("Reverse DCF check:", comparison.get("interpretation"))
-
-    log = st.session_state.get("assumption_update_log", [])
-    if log:
-        st.subheader("Pending Assumption Update Log")
-        show_table(pd.DataFrame(log), "No pending assumption updates.")
+    with st.expander("Show full clause table", expanded=False):
+        filtered_clauses = _filtered_clauses(clause_df)
+        show_table(filtered_clauses[[column for column in full_cols if column in filtered_clauses]], "No clauses match the selected filters.")
 
     debug = clause_df.attrs.get("debug", {})
     if debug:
-        with st.expander("Debug details"):
+        with st.expander("Debug details", expanded=False):
             st.json(debug)
 
 
@@ -4963,7 +5153,8 @@ def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
     assumptions = ctx["base_assumptions"]
     profile = infer_stock_profile(ctx["dataset"])
     st.caption(f"Stock-profile assumption group: {profile}.")
-    _valuation(ctx)
+    valuation_ctx = {**ctx, "analyst_details": analyst_details}
+    _valuation(valuation_ctx)
     with st.expander("Base Valuation Snapshot", expanded=False):
         render_status_grid(
             [
@@ -5033,14 +5224,10 @@ def _pa11r_financials_reinvestment_tab(ctx: dict, analyst_details: bool) -> None
 def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
     render_section(
         "Evidence & Assumptions",
-        "Use this tab to connect filing clauses and manual evidence to DCF assumptions. The default view shows only model-changing evidence.",
-        "Evidence",
+        "Translate company evidence into DCF assumption impacts: what was said, what it implies, how it differs from the model, and whether it belongs in User Case.",
+        "Evidence -> Assumption",
     )
-    st.subheader("Top Model-Changing Evidence")
-    show_table(_top_clause_impacts(ctx.get("clauses")), "No model-changing evidence loaded yet.")
-    _assumption_workbench(ctx, key_prefix="evidence")
-    with st.expander("Show full Clause Map", expanded=analyst_details):
-        _clause_annotation_map(ctx)
+    _clause_annotation_map(ctx)
     with st.expander("Filing Metadata and Guidance", expanded=analyst_details):
         _evidence(ctx)
 
