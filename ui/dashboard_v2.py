@@ -875,19 +875,467 @@ def _tearsheet_summary(ctx: dict, scenario_state: ScenarioModelState | None = No
 
 
 def _top_clause_impacts(clauses: pd.DataFrame) -> pd.DataFrame:
-    columns = ["topic", "model_line_affected", "direction", "confidence", "suggested_assumption_change"]
+    evidence = prepare_evidence_impacts(clauses, limit=3)
+    if evidence.empty:
+        return pd.DataFrame(columns=["Topic", "Model Impact", "Signal", "Confidence", "Action"])
+    return evidence[["Topic", "Model Line", "Assumption Signal", "Confidence", "Action"]].rename(columns={"Model Line": "Model Impact", "Assumption Signal": "Signal"})
+
+
+VALUATION_CRITICAL_MODEL_LINES = {
+    "revenue_growth",
+    "revenue_cagr",
+    "gross_margin",
+    "opex_pct_revenue",
+    "opex_ratio",
+    "ebit_margin",
+    "nopat_margin",
+    "ocf_margin",
+    "maintenance_capex_pct_revenue",
+    "growth_capex_pct_revenue",
+    "sbc_pct_revenue",
+    "sbc",
+    "diluted_share_growth",
+    "diluted_shares",
+    "wacc",
+    "terminal_growth",
+    "terminal_multiple",
+    "scenario_probability",
+}
+
+
+MODEL_LINE_ALIASES = {
+    "revenue_growth": "revenue_cagr",
+    "gross_margin": "gross_margin",
+    "opex_ratio": "opex_pct_revenue",
+    "opex_pct_revenue": "opex_pct_revenue",
+    "ebit_margin": "nopat_margin",
+    "nopat_margin": "nopat_margin",
+    "ocf_margin": "ocf_margin",
+    "maintenance_capex_pct_revenue": "maintenance_capex_pct_revenue",
+    "growth_capex_pct_revenue": "growth_capex_pct_revenue",
+    "working_capital_pct_revenue": "working_capital_pct_revenue",
+    "sbc": "sbc_pct_revenue",
+    "sbc_pct_revenue": "sbc_pct_revenue",
+    "diluted_shares": "diluted_share_growth",
+    "diluted_share_growth": "diluted_share_growth",
+    "wacc": "wacc",
+    "terminal_growth": "terminal_growth",
+    "terminal_multiple": "terminal_multiple",
+    "scenario_probability": "scenario_probability",
+}
+
+
+def _clean_evidence_text(value, max_chars: int = 180) -> str:
+    text = " ".join(str(value or "").replace("\u200b", " ").split())
+    if not text:
+        return UNAVAILABLE
+    return _clip_text(text, max_chars)
+
+
+def _evidence_id(row: dict) -> str:
+    parts = [
+        row.get("ticker"),
+        row.get("form"),
+        row.get("filing_date"),
+        row.get("section"),
+        row.get("topic"),
+        row.get("model_line_affected"),
+        _clean_evidence_text(row.get("clause_text"), 80),
+    ]
+    return "|".join(str(part or "") for part in parts)
+
+
+def _canonical_model_line(model_line: object) -> str:
+    key = str(model_line or "").strip().lower().replace(" ", "_").replace("/", "_")
+    key = re.sub(r"_+", "_", key)
+    return MODEL_LINE_ALIASES.get(key, key)
+
+
+def deduplicate_evidence_impacts(evidence_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove duplicate evidence rows while preserving distinct model-line impacts.
+    """
+    if evidence_df is None or evidence_df.empty:
+        return pd.DataFrame()
+    frame = evidence_df.copy()
+    for col in ["clause_text", "topic", "model_line_affected", "timeframe", "form", "filing_date", "accession_number"]:
+        if col not in frame:
+            frame[col] = ""
+    frame["_dedupe_clause"] = frame["clause_text"].map(lambda value: _clean_evidence_text(value, 700).lower())
+    frame["_dedupe_line"] = frame["model_line_affected"].map(_canonical_model_line)
+    frame["_dedupe_period"] = frame["timeframe"].fillna("").astype(str).str.lower()
+    frame["_dedupe_source"] = (
+        frame["form"].fillna("").astype(str)
+        + "|"
+        + frame["filing_date"].fillna("").astype(str)
+        + "|"
+        + frame["accession_number"].fillna("").astype(str)
+    )
+    frame = frame.drop_duplicates(subset=["_dedupe_clause", "topic", "_dedupe_line", "_dedupe_period", "_dedupe_source"])
+    return frame.drop(columns=[col for col in frame.columns if col.startswith("_dedupe")])
+
+
+def _extract_percent_signal(row: dict) -> tuple[float | None, str]:
+    text = " ".join(str(row.get(key) or "") for key in ["suggested_assumption_change", "clause_text"])
+    matches = re.findall(r"(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:%|percent|percentage points|pts)", text, flags=re.I)
+    values = []
+    for match in matches:
+        try:
+            number = float(match)
+        except ValueError:
+            continue
+        if -100 <= number <= 200:
+            values.append(number / 100)
+    values = sorted(set(round(value, 6) for value in values))
+    if not values:
+        return None, "No exact % available"
+    if len(values) >= 2:
+        low, high = min(values), max(values)
+        return (low + high) / 2, f"{fmt_percent(low)} to {fmt_percent(high)}"
+    return values[0], fmt_percent(values[0])
+
+
+def _assumption_signal_label(row: dict, implied_value: float | None, implied_range: str) -> str:
+    topic = str(row.get("topic") or "").upper()
+    model_line = _canonical_model_line(row.get("model_line_affected"))
+    direction = str(row.get("direction") or "").lower()
+    grade = str(row.get("evidence_grade") or "").lower()
+    action = str(row.get("dashboard_action") or "").lower()
+    if implied_value is not None and implied_range != "No exact % available":
+        return "Implied Range" if " to " in implied_range else "Calculated %"
+    if "estimate" in grade or "proxy" in grade:
+        return "Estimated Range"
+    if model_line == "revenue_cagr" and "increase" in direction:
+        return "Revenue Visibility Support"
+    if model_line in {"gross_margin", "nopat_margin", "ocf_margin"} and "increase" in direction:
+        return "Margin Expansion Support"
+    if model_line in {"gross_margin", "nopat_margin", "ocf_margin"} and "decrease" in direction:
+        return "Margin Pressure Warning" if model_line != "ocf_margin" else "Near-Term FCF Pressure"
+    if model_line in {"growth_capex_pct_revenue", "maintenance_capex_pct_revenue"} and "increase" in direction:
+        return "CAPEX Increase Warning"
+    if model_line in {"sbc_pct_revenue", "diluted_share_growth"} and "increase" in direction:
+        return "SBC / Dilution Warning"
+    if model_line in {"wacc", "terminal_multiple", "scenario_probability"} and ("risk" in topic.lower() or "flag" in action or "decrease" in direction):
+        return "Risk Increase Warning"
+    if "bull" in action or ("increase" in direction and model_line in {"terminal_multiple", "scenario_probability"}):
+        return "Bull Case Support"
+    if "bear" in action or "decrease" in direction:
+        return "Bear Case Support"
+    if "risk" in topic.lower() and "decrease" in direction:
+        return "Risk Reduction Support"
+    if row.get("clause_text"):
+        return "Qualitative Support"
+    return "Not Enough Evidence"
+
+
+def _format_assumption_signal_value(value, model_line: str) -> str:
+    if value is None:
+        return "No exact % available"
+    assumption_key = _canonical_model_line(model_line)
+    unit = ASSUMPTION_METADATA.get(assumption_key, {}).get("unit", "percent")
+    return format_assumption_value(value, unit)
+
+
+def _evidence_priority_score(row: dict, user_value=None, market_value=None) -> int:
+    score = 0
+    signal = row.get("Assumption Signal") or ""
+    model_line = _canonical_model_line(row.get("Model Line") or row.get("model_line_affected"))
+    confidence = str(row.get("Confidence") or row.get("confidence") or "").lower()
+    if signal == "Calculated %":
+        score += 30
+    if signal == "Implied Range":
+        score += 20
+    if signal == "Estimated Range":
+        score += 15
+    if confidence == "high":
+        score += 15
+    elif confidence == "medium":
+        score += 10
+    if model_line in VALUATION_CRITICAL_MODEL_LINES:
+        score += 15
+    implied = row.get("_implied_value")
+    if implied is not None and user_value is not None and abs(_assumption_float(implied) - _assumption_float(user_value)) >= 0.03:
+        score += 10
+    if market_value is not None:
+        score += 10
+    if signal in {"Qualitative Support", "Not Enough Evidence"}:
+        score -= 20
+    boilerplate = " ".join(str(row.get(key) or "") for key in ["Topic", "Evidence Summary", "topic", "clause_text"]).lower()
+    if any(token in boilerplate for token in ["item 1a", "risk factors", "quantitative and qualitative disclosures"]) and len(boilerplate) < 220:
+        score -= 30
+    return score
+
+
+def prepare_evidence_impacts(
+    evidence_df: pd.DataFrame,
+    *,
+    user_assumptions: dict | None = None,
+    market_implied: dict | None = None,
+    limit: int | None = 10,
+) -> pd.DataFrame:
+    if evidence_df is None or evidence_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "Priority",
+                "Topic",
+                "Evidence Summary",
+                "Model Line",
+                "Assumption Signal",
+                "Implied Value / Range",
+                "Current User Case",
+                "Market-Implied",
+                "Delta vs User",
+                "Confidence",
+                "Action",
+            ]
+        )
+    frame = deduplicate_evidence_impacts(evidence_df)
+    rows = []
+    for idx, raw in frame.reset_index(drop=True).iterrows():
+        row = raw.to_dict()
+        model_line = _canonical_model_line(row.get("model_line_affected"))
+        implied_value, implied_range = _extract_percent_signal(row)
+        signal = _assumption_signal_label(row, implied_value, implied_range)
+        user_value = (user_assumptions or {}).get(model_line)
+        market_value = (market_implied or {}).get(model_line)
+        delta = implied_value - user_value if implied_value is not None and user_value is not None else None
+        display_row = {
+            "_row_index": idx,
+            "_evidence_id": _evidence_id(row),
+            "_implied_value": implied_value,
+            "_raw": row,
+            "Priority": 0,
+            "Topic": str(row.get("topic") or "Unclassified").replace("_", " ").title(),
+            "Evidence Summary": _clean_evidence_text(row.get("suggested_assumption_change") or row.get("clause_text"), 150),
+            "Model Line": model_line,
+            "Assumption Signal": signal,
+            "Implied Value / Range": implied_range,
+            "Current User Case": _format_assumption_signal_value(user_value, model_line),
+            "Market-Implied": _format_assumption_signal_value(market_value, model_line),
+            "Delta vs User": _assumption_delta_text(delta, ASSUMPTION_METADATA.get(model_line, {}).get("unit", "percent")) if delta is not None else UNAVAILABLE,
+            "Confidence": row.get("confidence") or "Manual Review",
+            "Action": _clean_evidence_action(row.get("dashboard_action")),
+            "Source": row.get("form") or row.get("source_url") or UNAVAILABLE,
+            "Review Status": row.get("review_status") or "Unreviewed",
+            "Evidence Grade": row.get("evidence_grade") or UNAVAILABLE,
+            "Full Clause": _clean_evidence_text(row.get("clause_text"), 900),
+            "Section": row.get("section") or UNAVAILABLE,
+            "Timeframe": row.get("timeframe") or UNAVAILABLE,
+        }
+        display_row["Priority"] = _evidence_priority_score(display_row, user_value, market_value)
+        rows.append(display_row)
+    result = pd.DataFrame(rows).sort_values(["Priority", "Confidence", "Topic"], ascending=[False, True, True])
+    if limit:
+        return result.head(limit).reset_index(drop=True)
+    return result.reset_index(drop=True)
+
+
+def _clean_evidence_action(value) -> str:
+    text = str(value or "").strip().replace("_", " ")
+    mapping = {
+        "review dcf": "Review",
+        "flag risk": "Needs Source Verification",
+        "manual review": "Needs Source Verification",
+        "update scenario": "Apply / Review",
+    }
+    return mapping.get(text.lower(), text.title() if text else "Review")
+
+
+def _evidence_summary_counts(evidence_df: pd.DataFrame, top_impacts: pd.DataFrame) -> list[dict]:
+    source_count = 0 if evidence_df is None else len(deduplicate_evidence_impacts(evidence_df))
+    calculated = int((top_impacts.get("Assumption Signal", pd.Series(dtype=str)) == "Calculated %").sum()) if not top_impacts.empty else 0
+    ranges = int(top_impacts.get("Assumption Signal", pd.Series(dtype=str)).isin(["Implied Range", "Estimated Range"]).sum()) if not top_impacts.empty else 0
+    qualitative = int(top_impacts.get("Assumption Signal", pd.Series(dtype=str)).isin(["Qualitative Support", "Not Enough Evidence"]).sum()) if not top_impacts.empty else 0
+    applied = len([row for row in st.session_state.get("assumption_update_log", []) if str(row.get("case") or row.get("scenario")) == "User Case" and str(row.get("status", "")).lower() in {"active", "pending"}])
+    review = len([row for row in top_impacts.to_dict("records") if "verification" in str(row.get("Action", "")).lower() or row.get("Confidence") in {"Low", "Manual Review"}])
+    return [
+        {"title": "Model-Impacting Evidence", "value": _fmt_plain(source_count), "subtitle": "Deduplicated clause-to-model impacts.", "status": "info"},
+        {"title": "Calculated Impacts", "value": _fmt_plain(calculated), "subtitle": "Rows with an extracted numeric percent.", "status": "supportive" if calculated else "neutral"},
+        {"title": "Estimated Ranges", "value": _fmt_plain(ranges), "subtitle": "Implied or proxy-based assumption ranges.", "status": "caution" if ranges else "neutral"},
+        {"title": "Qualitative Signals", "value": _fmt_plain(qualitative), "subtitle": "Useful context without exact model math.", "status": "neutral"},
+        {"title": "Applied to User Case", "value": _fmt_plain(applied), "subtitle": "Active or pending evidence-driven edits.", "status": "supportive" if applied else "neutral"},
+        {"title": "Needs Review", "value": _fmt_plain(review), "subtitle": "Items requiring source verification.", "status": "warning" if review else "supportive"},
+    ]
+
+
+def _filtered_evidence_archive(clauses: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     if clauses is None or clauses.empty:
-        return pd.DataFrame(columns=["Topic", "Model Impact", "Direction", "Confidence", "Action"])
-    available = [column for column in columns if column in clauses]
-    frame = clauses[available].head(3).copy()
-    rename = {
+        return pd.DataFrame()
+    filtered = deduplicate_evidence_impacts(clauses)
+    search = st.text_input("Search clauses", value="", key=f"{key_prefix}_archive_search")
+    filter_cols = st.columns(6)
+    filter_specs = [
+        ("topic", "Topic"),
+        ("model_line_affected", "Model Line"),
+        ("evidence_grade", "Evidence Grade"),
+        ("confidence", "Confidence"),
+        ("form", "Source Filing"),
+        ("review_status", "Review Status"),
+    ]
+    for col, (source_col, label) in zip(filter_cols, filter_specs):
+        values = _unique_sorted_evidence_values(filtered, source_col)
+        selected = col.selectbox(label, ["All", *values], key=f"{key_prefix}_archive_{source_col}")
+        if selected != "All" and source_col in filtered:
+            filtered = filtered[filtered[source_col].map(lambda value: _clean_evidence_text(value, 80)) == selected]
+    if search:
+        needle = search.lower()
+        text_cols = [col for col in ["topic", "subtopic", "section", "clause_text", "model_line_affected", "suggested_assumption_change"] if col in filtered]
+        mask = filtered[text_cols].fillna("").astype(str).agg(" ".join, axis=1).str.lower().str.contains(re.escape(needle), na=False)
+        filtered = filtered[mask]
+    columns = {
         "topic": "Topic",
-        "model_line_affected": "Model Impact",
+        "subtopic": "Subtopic",
+        "section": "Section",
+        "clause_text": "Clause Text",
+        "model_line_affected": "Model Line",
         "direction": "Direction",
         "confidence": "Confidence",
-        "suggested_assumption_change": "Action",
+        "evidence_grade": "Evidence Grade",
+        "source_url": "Source",
+        "review_status": "Review Status",
     }
-    return frame.rename(columns=rename)
+    available = [col for col in columns if col in filtered]
+    return filtered[available].rename(columns=columns)
+
+
+def _unique_sorted_evidence_values(frame: pd.DataFrame, column: str) -> list[str]:
+    if frame is None or frame.empty or column not in frame:
+        return []
+    return sorted(
+        {
+            _clean_evidence_text(value, 80)
+            for value in frame[column].dropna().tolist()
+            if _clean_evidence_text(value, 80) != UNAVAILABLE
+        }
+    )
+
+
+def _manual_review_items_for_evidence(ctx: dict) -> pd.DataFrame:
+    rows = []
+    for item in _manual_review_items(ctx):
+        rows.append(
+            {
+                "Data Needed": item.get("Data Needed"),
+                "Why It Matters": item.get("Reason"),
+                "Where to Check": item.get("Section to Review"),
+                "Suggested Keywords": item.get("Keywords"),
+                "Source Link": item.get("Source URL"),
+                "Model Line": "maintenance_capex_pct_revenue / growth_capex_pct_revenue" if "CAPEX" in str(item.get("Data Needed")) else "net_debt / wacc",
+                "Action": "Search Filing",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _append_evidence_note(row: dict, status: str, scenario: str = "User Case", note: str = "") -> None:
+    raw = row.get("_raw", row)
+    entry = {
+        "timestamp": pd.Timestamp.utcnow().isoformat(),
+        "evidence_id": row.get("_evidence_id") or _evidence_id(raw),
+        "case": scenario,
+        "scenario": scenario,
+        "model_line": row.get("Model Line") or raw.get("model_line_affected"),
+        "period": row.get("Timeframe") or raw.get("timeframe") or "Review period",
+        "old_value": row.get("Current User Case"),
+        "new_value": row.get("Implied Value / Range"),
+        "source": row.get("Source") or raw.get("form") or raw.get("source_url"),
+        "method": raw.get("suggested_assumption_change") or "Evidence review",
+        "confidence": row.get("Confidence"),
+        "status": status,
+        "evidence_summary": row.get("Evidence Summary"),
+        "user_note": note,
+    }
+    st.session_state.setdefault("assumption_update_log", []).append(entry)
+    st.session_state["pa11r_assumption_change_log"] = list(st.session_state.get("assumption_update_log", []))
+
+
+def _apply_evidence_to_user_case(ctx: dict, scenario_state: ScenarioModelState, row: dict, note: str = "") -> bool:
+    model_line = _canonical_model_line(row.get("Model Line"))
+    implied_value = row.get("_implied_value")
+    if model_line not in ASSUMPTION_METADATA or implied_value is None:
+        return False
+    user = dict(scenario_state.user_assumptions)
+    old_value = user.get(model_line)
+    user[model_line] = implied_value
+    user = _normalize_assumption_bridge(user)
+    ticker = scenario_state.ticker or ctx.get("dataset", {}).get("ticker", "default")
+    st.session_state[_session_key_for_ticker("assumption_user_case", ticker)] = user
+    st.session_state["pa11r_user_assumptions"] = user
+    raw = row.get("_raw", {})
+    entry = {
+        "timestamp": pd.Timestamp.utcnow().isoformat(),
+        "evidence_id": row.get("_evidence_id") or _evidence_id(raw),
+        "case": "User Case",
+        "scenario": "User Case",
+        "model_line": model_line,
+        "period": row.get("Timeframe") or raw.get("timeframe") or "Review period",
+        "old_value": old_value,
+        "new_value": implied_value,
+        "source": row.get("Source") or raw.get("form") or raw.get("source_url"),
+        "method": raw.get("suggested_assumption_change") or "Evidence-derived assumption update",
+        "confidence": row.get("Confidence"),
+        "status": "Active",
+        "evidence_summary": row.get("Evidence Summary"),
+        "user_note": note,
+    }
+    st.session_state.setdefault("assumption_update_log", []).append(entry)
+    st.session_state["pa11r_assumption_change_log"] = list(st.session_state.get("assumption_update_log", []))
+    st.session_state.pop("pa11r_active_model_output", None)
+    return True
+
+
+def _render_selected_evidence_detail(ctx: dict, row: dict, scenario_state: ScenarioModelState, key_prefix: str) -> None:
+    if not row:
+        st.info("Select a model-impacting evidence row to inspect the detail.")
+        return
+    raw = row.get("_raw", {})
+    model_line = row.get("Model Line")
+    implied_value = row.get("_implied_value")
+    user_value = scenario_state.user_assumptions.get(model_line)
+    market_value = scenario_state.market_implied_assumptions.get(model_line)
+    st.markdown('<div class="pa-section-title">Evidence Detail</div>', unsafe_allow_html=True)
+    detail_rows = pd.DataFrame(
+        [
+            {"Field": "Evidence Summary", "Value": row.get("Evidence Summary")},
+            {"Field": "Full Clause", "Value": row.get("Full Clause")},
+            {"Field": "Source", "Value": row.get("Source")},
+            {"Field": "Filing / Section", "Value": f"{row.get('Source')} / {row.get('Section')}"},
+            {"Field": "Model Impact", "Value": f"{model_line} -> {row.get('Assumption Signal')}"},
+            {"Field": "Implied Calculation", "Value": row.get("Implied Value / Range")},
+            {"Field": "Current User Case", "Value": _format_assumption_signal_value(user_value, model_line)},
+            {"Field": "Market-Implied Comparison", "Value": _format_assumption_signal_value(market_value, model_line)},
+            {"Field": "Suggested Action", "Value": row.get("Action")},
+            {"Field": "Confidence Explanation", "Value": f"{row.get('Confidence')} confidence from {row.get('Evidence Grade')} evidence."},
+            {"Field": "Warnings", "Value": "No exact model value was found; create a note or verify the source before applying." if implied_value is None else "Review period mapping before applying to a forecast year."},
+        ]
+    )
+    show_table(detail_rows, "No selected evidence detail available.")
+    note = st.text_input("User note", value="", key=f"{key_prefix}_selected_note")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    can_apply = model_line in ASSUMPTION_METADATA and implied_value is not None
+    with c1:
+        if st.button("Apply to User Case", key=f"{key_prefix}_apply_user", disabled=not can_apply, type="primary"):
+            if _apply_evidence_to_user_case(ctx, scenario_state, row, note):
+                st.success("Applied to User Case and added to the assumption change log.")
+                st.rerun()
+            else:
+                st.warning("This evidence needs source verification before it can update a model assumption.")
+    with c2:
+        if st.button("Use as Bull Case", key=f"{key_prefix}_bull_note"):
+            _append_evidence_note(row, "Pending", "Bull Case", note)
+            st.success("Added as a Bull Case evidence note.")
+    with c3:
+        if st.button("Create Note Only", key=f"{key_prefix}_note_only"):
+            _append_evidence_note(row, "Note Only", "User Case", note)
+            st.success("Evidence note added.")
+    with c4:
+        if st.button("Ignore", key=f"{key_prefix}_ignore"):
+            _append_evidence_note(row, "Ignored", "User Case", note)
+            st.info("Evidence marked ignored in the assumption log.")
+    with c5:
+        if st.button("Needs Source Verification", key=f"{key_prefix}_verify"):
+            _append_evidence_note(row, "Needs Source Verification", "User Case", note)
+            st.warning("Evidence sent to manual source verification.")
 
 
 def _capex_view(ctx: dict) -> dict:
@@ -5310,16 +5758,70 @@ def _pa11r_financials_reinvestment_tab(ctx: dict, analyst_details: bool) -> None
 def _pa11r_evidence_assumptions_tab(ctx: dict, analyst_details: bool) -> None:
     render_section(
         "Evidence & Assumptions",
-        "Use this tab to connect filing clauses and manual evidence to DCF assumptions. The default view shows only model-changing evidence.",
+        "Top evidence first. Raw clauses are hidden unless you open the archive.",
         "Evidence",
     )
-    st.subheader("Top Model-Changing Evidence")
-    show_table(_top_clause_impacts(ctx.get("clauses")), "No model-changing evidence loaded yet.")
-    _assumption_workbench(ctx, key_prefix="evidence")
-    with st.expander("Show full Clause Map", expanded=analyst_details):
-        _clause_annotation_map(ctx)
-    with st.expander("Filing Metadata and Guidance", expanded=analyst_details):
+    scenario_state = recalculate_active_scenario(ctx, "User Case")
+    clauses = ctx.get("clauses")
+    top_impacts = prepare_evidence_impacts(
+        clauses,
+        user_assumptions=scenario_state.user_assumptions,
+        market_implied=scenario_state.market_implied_assumptions,
+        limit=10,
+    )
+
+    st.markdown('<div class="pa-section-title">Evidence Summary</div>', unsafe_allow_html=True)
+    render_status_grid(_evidence_summary_counts(clauses, top_impacts))
+    if top_impacts.empty:
+        st.info("No model-impacting evidence is loaded yet. Load SEC evidence from the sidebar or use Source / Debug Details below to run clause extraction.")
+    elif (top_impacts["Assumption Signal"].isin(["Qualitative Support", "Not Enough Evidence"]).mean() if len(top_impacts) else 0) > 0.5:
+        _notice("Many clauses are qualitative only. Numeric guidance may be limited or extraction rules may need review.", "warning")
+
+    st.markdown('<div class="pa-section-title">Top Model Impacts</div>', unsafe_allow_html=True)
+    display_cols = [
+        "Priority",
+        "Topic",
+        "Evidence Summary",
+        "Model Line",
+        "Assumption Signal",
+        "Implied Value / Range",
+        "Current User Case",
+        "Market-Implied",
+        "Delta vs User",
+        "Confidence",
+        "Action",
+    ]
+    show_table(top_impacts[[col for col in display_cols if col in top_impacts]], "No top model-impacting evidence available.")
+
+    selected_row = {}
+    if not top_impacts.empty:
+        options = top_impacts.index.tolist()
+        selected_idx = st.selectbox(
+            "Selected evidence",
+            options,
+            format_func=lambda idx: f"{top_impacts.at[idx, 'Topic']} | {top_impacts.at[idx, 'Model Line']} | {top_impacts.at[idx, 'Assumption Signal']}",
+            key="evidence_selected_impact",
+        )
+        selected_row = top_impacts.loc[selected_idx].to_dict()
+    _render_selected_evidence_detail(ctx, selected_row, scenario_state, "evidence")
+
+    with st.expander("Full Clause Archive", expanded=False):
+        show_raw = st.toggle("Show raw clauses", value=False, key="evidence_show_raw_clauses")
+        archive = _filtered_evidence_archive(clauses, "evidence")
+        if show_raw:
+            show_table(archive, "No clause archive available.")
+        else:
+            st.caption("Raw clause archive is hidden by default. Turn on Show raw clauses to inspect the filing browser.")
+
+    with st.expander("Manual Review Items", expanded=False):
+        show_table(_manual_review_items_for_evidence(ctx), "No manual review items.")
+
+    with st.expander("Assumption Update Log", expanded=False):
+        _assumption_update_log_editor(ctx, key_prefix="evidence_log")
+
+    with st.expander("Source / Debug Details", expanded=analyst_details):
         _evidence(ctx)
+        _clause_annotation_map(ctx)
 
 
 def _pa11r_business_quality_tab(ctx: dict, analyst_details: bool) -> None:
