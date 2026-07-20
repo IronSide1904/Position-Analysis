@@ -2,7 +2,15 @@ import pandas as pd
 
 from models.dcf_model import build_dcf_output_table, build_scenario_table, default_assumptions_from_historicals, run_dcf
 from models.financial_model import build_ev_to_equity_bridge
-from ui.dashboard_v2 import _build_assumption_scenarios, _active_assumption_edit_count, _dcf_forecast_output_table
+from ui.dashboard_v2 import (
+    _active_assumption_edit_count,
+    _assumption_gap_table,
+    _build_assumption_scenarios,
+    _dcf_forecast_output_table,
+    _scenario_valuation_summary,
+    recalculate_active_scenario,
+    validate_scenario_consistency,
+)
 
 
 def sample_historicals():
@@ -156,3 +164,34 @@ def test_dcf_detail_and_ev_bridge_are_separate_tables():
     assert "Evidence / Source" in bridge.columns
     assert not any(str(column).startswith("Year ") for column in bridge.columns)
     assert {"Enterprise value", "Equity value", "Fair value / share"}.issubset(set(bridge["Metric"]))
+
+
+def test_active_scenario_state_recalculates_user_case_outputs():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    base = default_assumptions_from_historicals(historicals, market)
+    ctx = {"dataset": {"ticker": "TEST", "market_data": market}, "historicals": historicals, "base_assumptions": base}
+
+    base_state = recalculate_active_scenario(ctx, "User Case", base)
+    edited = {**base, "revenue_cagr": base["revenue_cagr"] + 0.10}
+    edited_state = recalculate_active_scenario(ctx, "User Case", edited)
+
+    assert edited_state.selected_case == "User Case"
+    assert edited_state.active_assumptions["revenue_cagr"] == edited["revenue_cagr"]
+    assert edited_state.model_outputs["dcf"]["fair_value_per_share"] != base_state.model_outputs["dcf"]["fair_value_per_share"]
+    assert validate_scenario_consistency(ctx, edited_state) == []
+
+
+def test_market_gap_and_scenario_reference_use_central_state():
+    historicals = sample_historicals()
+    market = {"price": 1000.0, "shares_outstanding": 100.0}
+    base = default_assumptions_from_historicals(historicals, market)
+    ctx = {"dataset": {"ticker": "TEST", "market_data": market}, "historicals": historicals, "base_assumptions": base}
+
+    state = recalculate_active_scenario(ctx, "User Case", base)
+    gap = _assumption_gap_table(state)
+    valuation_reference = _scenario_valuation_summary(state, market)
+
+    nopat_row = gap[gap["Assumption"] == "NOPAT Margin %"].iloc[0]
+    assert nopat_row["Market-Implied"] == "Outside range"
+    assert "Market Price" in valuation_reference["Scenario"].tolist()

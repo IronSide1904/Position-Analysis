@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import html
 import re
 
@@ -656,8 +657,8 @@ def _data_confidence(ctx: dict) -> tuple[str, str, str]:
     return "Low", "Provider data is unavailable or blocked.", "negative"
 
 
-def _valuation_view(ctx: dict) -> tuple[str, str, str]:
-    dcf = ctx.get("base_dcf", {})
+def _valuation_view(ctx: dict, scenario_state: ScenarioModelState | None = None) -> tuple[str, str, str]:
+    dcf = scenario_state.model_outputs.get("dcf", {}) if scenario_state else ctx.get("base_dcf", {})
     upside = dcf.get("upside_downside_pct")
     terminal = dcf.get("terminal_value_weight_pct")
     if upside is None:
@@ -677,18 +678,19 @@ def _valuation_view(ctx: dict) -> tuple[str, str, str]:
     return view, subtitle, status
 
 
-def _snapshot_valuation_cards(ctx: dict) -> list[dict]:
+def _snapshot_valuation_cards(ctx: dict, scenario_state: ScenarioModelState | None = None) -> list[dict]:
     market = ctx.get("dataset", {}).get("market_data", {})
-    dcf = ctx.get("base_dcf", {})
+    dcf = scenario_state.model_outputs.get("dcf", {}) if scenario_state else ctx.get("base_dcf", {})
+    selected_case = scenario_state.selected_case if scenario_state else "Base Case"
     try:
-        sotp = get_active_sotp(ctx, "Base Case")
+        sotp = get_active_sotp(ctx, selected_case)
     except Exception:
         segments = build_default_segment_data(ctx.get("historicals"), ctx.get("dataset", {}), ctx.get("base_assumptions", {}))
         sotp = run_sotp(
             segments,
             market,
-            ctx.get("base_assumptions", {}),
-            scenario="Base Case",
+            scenario_state.active_assumptions if scenario_state else ctx.get("base_assumptions", {}),
+            scenario=selected_case,
             dcf_output=dcf,
             peer_multiples=ctx.get("peer_df"),
             sector=ctx.get("dataset", {}).get("sector"),
@@ -702,9 +704,11 @@ def _snapshot_valuation_cards(ctx: dict) -> list[dict]:
     premium_text = fmt_percent(premium) if premium is not None else UNAVAILABLE
     whole_status = "supportive" if ">" in str(sotp.get("whole_vs_sum")) else "warning" if "Overvalued" in str(sotp.get("whole_vs_sum")) else "neutral"
     return [
-        {"title": "DCF Fair Value", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": "Intrinsic value anchor.", "status": "info"},
-        {"title": "SOTP Fair Value", "value": fmt_per_share(sotp.get("fair_value_per_share")), "subtitle": "Base-case sum-of-the-parts read.", "status": "info"},
+        {"title": "Selected Scenario", "value": selected_case, "subtitle": "Snapshot uses this active valuation scenario.", "status": "info"},
+        {"title": "DCF Fair Value", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": f"{selected_case} intrinsic value anchor.", "status": "info"},
+        {"title": "SOTP Fair Value", "value": fmt_per_share(sotp.get("fair_value_per_share")), "subtitle": f"{selected_case} sum-of-the-parts read.", "status": "info"},
         {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Provider market price.", "status": "neutral"},
+        {"title": "Market-Implied Gap", "value": (scenario_state.reverse_dcf_outputs or {}).get("market_case") if scenario_state else ctx.get("reverse", {}).get("market_case"), "subtitle": (scenario_state.reverse_dcf_outputs or {}).get("interpretation") if scenario_state else ctx.get("reverse", {}).get("interpretation"), "status": "info"},
         {"title": "Whole vs Parts", "value": sotp.get("whole_vs_sum") or "Unavailable", "subtitle": sotp.get("whole_vs_sum_interpretation"), "status": whole_status},
         {"title": "Scenario Multiple Risk", "value": multiple_risk, "subtitle": f"Current EV/OCF premium vs peer: {premium_text}.", "status": "warning" if multiple_risk == "High" else "caution" if multiple_risk == "Medium" else "supportive"},
         {"title": "Peer Premium / Discount", "value": premium_text, "subtitle": "Current EV/OCF versus peer/sector reference.", "status": "warning" if premium is not None and premium > 0.25 else "supportive" if premium is not None and premium < -0.15 else "neutral"},
@@ -834,8 +838,8 @@ def _manual_review_plan_table(ctx: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _decision_summary(ctx: dict) -> dict:
-    valuation_view, valuation_subtitle, _ = _valuation_view(ctx)
+def _decision_summary(ctx: dict, scenario_state: ScenarioModelState | None = None) -> dict:
+    valuation_view, valuation_subtitle, _ = _valuation_view(ctx, scenario_state)
     swing_view, swing_subtitle, _ = _swing_view(ctx)
     confidence, confidence_subtitle, _ = _data_confidence(ctx)
     risk_rows = _risk_review_table(ctx, limit=3)
@@ -848,7 +852,7 @@ def _decision_summary(ctx: dict) -> dict:
         "what_matters": [
             f"Investment view is {ctx['scoring'].get('recommendation') or 'Unknown'} while valuation reads {valuation_view}.",
             f"Swing view is {swing_view}. {swing_subtitle}",
-            ctx.get("reverse", {}).get("interpretation") or "Reverse DCF benchmark unavailable.",
+            (scenario_state.reverse_dcf_outputs if scenario_state else ctx.get("reverse", {})).get("interpretation") or "Reverse DCF benchmark unavailable.",
         ],
         "supporting": _top_three_drivers(ctx)[:2],
         "contradicting": contradicting or _top_three_risks(ctx)[:3],
@@ -857,8 +861,8 @@ def _decision_summary(ctx: dict) -> dict:
     }
 
 
-def _tearsheet_summary(ctx: dict) -> dict:
-    valuation_view, valuation_subtitle, _ = _valuation_view(ctx)
+def _tearsheet_summary(ctx: dict, scenario_state: ScenarioModelState | None = None) -> dict:
+    valuation_view, valuation_subtitle, _ = _valuation_view(ctx, scenario_state)
     swing_view, swing_subtitle, _ = _swing_view(ctx)
     confidence, confidence_subtitle, _ = _data_confidence(ctx)
     return {
@@ -2128,6 +2132,239 @@ def _market_implied_assumptions(reverse: dict, base: dict) -> dict:
     }
 
 
+SCENARIO_CASES = ["Base Case", "User Case", "Bull Case", "Bear Case", "Market-Implied Case"]
+
+
+@dataclass
+class ScenarioModelState:
+    ticker: str
+    selected_case: str
+    base_assumptions: dict
+    user_assumptions: dict
+    bull_assumptions: dict
+    bear_assumptions: dict
+    market_implied_assumptions: dict
+    active_assumptions: dict
+    model_outputs: dict
+    reverse_dcf_outputs: dict
+    assumption_change_log: list
+    evidence_links: dict
+    warnings: list
+
+
+def _scenario_assumption_set(base: dict, user: dict | None, reverse: dict | None = None) -> dict:
+    scenarios = _build_assumption_scenarios(base, user)
+    market_case = _market_implied_assumptions(reverse or {}, scenarios["Base Case"])
+    market_clean = {key: value for key, value in market_case.items() if value is not None}
+    scenarios["Market-Implied Case"] = _normalize_assumption_bridge({**scenarios["Base Case"], **market_clean})
+    return scenarios
+
+
+def _active_user_assumption_log() -> list:
+    rows = st.session_state.get("pa11r_assumption_change_log", st.session_state.get("assumption_update_log", []))
+    return [row for row in rows if str(row.get("status", "Active")).lower() not in {"inactive", "ignored", "disabled"}]
+
+
+def recalculate_active_scenario(ctx: dict, selected_case: str = "User Case", user_assumptions: dict | None = None) -> ScenarioModelState:
+    dataset = ctx.get("dataset", {})
+    ticker = dataset.get("ticker", "default")
+    market = dataset.get("market_data", {})
+    historicals = ctx.get("historicals")
+    base = _normalize_assumption_bridge(ctx.get("base_assumptions", {}))
+    user = _normalize_assumption_bridge(user_assumptions or _current_user_assumptions(ctx) or base)
+    base_reverse = run_reverse_dcf(market, historicals, base)
+    scenarios = _scenario_assumption_set(base, user, base_reverse)
+    selected = selected_case if selected_case in scenarios else "User Case"
+    active_assumptions = scenarios[selected]
+    active_dcf = run_dcf(historicals, market, active_assumptions)
+    model_table = build_time_axis_financial_model(historicals, active_dcf.get("forecast_table"), active_assumptions)
+    dcf_output_table = _dcf_forecast_output_table(active_dcf, active_assumptions, historicals)
+    dcf_detail = build_dcf_output_table(active_dcf, active_assumptions, market)
+    ev_bridge = build_ev_to_equity_bridge(market, active_dcf, active_assumptions)
+    active_reverse = run_reverse_dcf(market, historicals, active_assumptions)
+    reverse_table = build_reverse_dcf_table(base_reverse, base, market)
+    scenario_outputs = {case: run_dcf(historicals, market, assumptions) for case, assumptions in scenarios.items()}
+    warnings = _default_model_sanity_warnings(ctx, active_assumptions, active_reverse, active_dcf, ev_bridge)
+    state = ScenarioModelState(
+        ticker=ticker,
+        selected_case=selected,
+        base_assumptions=scenarios["Base Case"],
+        user_assumptions=scenarios["User Case"],
+        bull_assumptions=scenarios["Bull Case"],
+        bear_assumptions=scenarios["Bear Case"],
+        market_implied_assumptions=scenarios["Market-Implied Case"],
+        active_assumptions=active_assumptions,
+        model_outputs={
+            "dcf": active_dcf,
+            "forecast_table": active_dcf.get("forecast_table"),
+            "model_table": model_table,
+            "dcf_output_table": dcf_output_table,
+            "dcf_detail": dcf_detail,
+            "ev_bridge": ev_bridge,
+            "scenario_assumptions": scenarios,
+            "scenario_outputs": scenario_outputs,
+            "reverse_table": reverse_table,
+            "active_reverse": active_reverse,
+        },
+        reverse_dcf_outputs=base_reverse,
+        assumption_change_log=_active_user_assumption_log(),
+        evidence_links={},
+        warnings=warnings,
+    )
+    st.session_state["pa11r_selected_scenario"] = selected
+    st.session_state["pa11r_user_assumptions"] = dict(state.user_assumptions)
+    st.session_state["pa11r_assumption_change_log"] = list(state.assumption_change_log)
+    st.session_state["pa11r_active_model_output"] = state.model_outputs
+    return state
+
+
+def apply_user_assumption_edit(
+    scenario_state: ScenarioModelState,
+    row_key: str,
+    period: str,
+    old_value,
+    new_value,
+    source: str = "User-edited",
+) -> ScenarioModelState:
+    meta = DCF_ROW_METADATA.get(row_key) or VALUATION_ROW_METADATA.get(row_key)
+    if not meta:
+        return scenario_state
+    user = dict(scenario_state.user_assumptions)
+    parsed_value = _internal_assumption_number(new_value, meta["unit"])
+    if parsed_value is None:
+        return scenario_state
+    if row_key == "cogs_pct_revenue":
+        user["gross_margin"] = max(0.0, min(1.0, 1 - parsed_value))
+    else:
+        user[meta["assumption_key"]] = parsed_value
+    log_entry = {
+        "timestamp": pd.Timestamp.utcnow().isoformat(),
+        "case": "User Case",
+        "row_key": row_key,
+        "label": meta["label"],
+        "period": period,
+        "old_value": old_value,
+        "new_value": new_value,
+        "source": source,
+        "status": "Active",
+    }
+    st.session_state[_session_key_for_ticker("assumption_user_case", scenario_state.ticker)] = user
+    st.session_state["pa11r_user_assumptions"] = user
+    st.session_state.setdefault("assumption_update_log", []).append(log_entry)
+    st.session_state["pa11r_assumption_change_log"] = list(st.session_state.get("assumption_update_log", []))
+    st.session_state.pop("pa11r_active_model_output", None)
+    return ScenarioModelState(
+        ticker=scenario_state.ticker,
+        selected_case="User Case",
+        base_assumptions=scenario_state.base_assumptions,
+        user_assumptions=_normalize_assumption_bridge(user),
+        bull_assumptions=scenario_state.bull_assumptions,
+        bear_assumptions=scenario_state.bear_assumptions,
+        market_implied_assumptions=scenario_state.market_implied_assumptions,
+        active_assumptions=_normalize_assumption_bridge(user),
+        model_outputs={},
+        reverse_dcf_outputs=scenario_state.reverse_dcf_outputs,
+        assumption_change_log=st.session_state.get("pa11r_assumption_change_log", []),
+        evidence_links=scenario_state.evidence_links,
+        warnings=["User Case changed; recalculate active scenario output."],
+    )
+
+
+def _market_value_for_gap(reverse: dict, market_assumptions: dict, key: str):
+    solve_key = key
+    if key == "wacc":
+        return market_assumptions.get("wacc"), "Not solved"
+    solves = reverse.get("solves") or {}
+    if solve_key in solves and solves[solve_key].get("implied") is None:
+        return None, "Outside range" if solves[solve_key].get("status") == "Outside Range" else solves[solve_key].get("status", "Unavailable")
+    return market_assumptions.get(key), None
+
+
+def _assumption_gap_table(state: ScenarioModelState) -> pd.DataFrame:
+    rows = []
+    keys = [
+        ("revenue_cagr", "Revenue Growth %"),
+        ("nopat_margin", "NOPAT Margin %"),
+        ("ocf_margin", "OCF Margin %"),
+        ("maintenance_capex_pct_revenue", "Maintenance CAPEX % Revenue"),
+        ("growth_capex_pct_revenue", "Growth CAPEX % Revenue"),
+        ("terminal_growth", "Terminal Growth %"),
+        ("terminal_multiple", "Terminal Multiple"),
+        ("wacc", "WACC"),
+    ]
+    forecast = state.model_outputs.get("forecast_table")
+    if forecast is not None and not forecast.empty:
+        final_revenue = forecast.iloc[-1].get("Revenue")
+        final_fcf = forecast.iloc[-1].get("FCF")
+        fcf_margin = final_fcf / final_revenue if final_revenue else None
+    else:
+        fcf_margin = None
+    for key, label in keys:
+        meta_unit = "x" if key == "terminal_multiple" else "%"
+        user_value = state.user_assumptions.get(key)
+        market_value, market_status = _market_value_for_gap(state.reverse_dcf_outputs, state.market_implied_assumptions, key)
+        if market_status:
+            market_display = market_status
+            gap = "Outside range" if market_status == "Outside range" else UNAVAILABLE
+            interpretation = "Market requires assumptions outside bounded Reverse DCF." if market_status == "Outside range" else "Market-implied value unavailable."
+        else:
+            market_display = _display_assumption_cell(market_value, meta_unit)
+            if user_value is not None and market_value is not None:
+                delta = market_value - user_value
+                gap = f"{delta * 100:+.1f} pts" if meta_unit == "%" else f"{delta:+.1f}x"
+                interpretation = "Market requires higher value" if delta > 0 else "User case is above market-implied" if delta < 0 else "Aligned"
+            else:
+                gap = UNAVAILABLE
+                interpretation = "Comparison unavailable."
+        rows.append(
+            {
+                "Assumption": label,
+                "User Case": _display_assumption_cell(user_value, meta_unit),
+                "Market-Implied": market_display,
+                "Gap": gap,
+                "Interpretation": interpretation,
+            }
+        )
+    rows.append(
+        {
+            "Assumption": "FCF Margin %",
+            "User Case": _display_assumption_cell(fcf_margin, "%"),
+            "Market-Implied": "Scenario dependent",
+            "Gap": UNAVAILABLE,
+            "Interpretation": "Review forecast overlay for cash-flow conversion.",
+        }
+    )
+    return pd.DataFrame(rows)
+
+
+def _scenario_valuation_summary(state: ScenarioModelState, market: dict) -> pd.DataFrame:
+    outputs = state.model_outputs.get("scenario_outputs", {})
+    rows = []
+    for case in ["Bear Case", "Base Case", "User Case", "Bull Case"]:
+        rows.append({"Scenario": case.replace(" Case", ""), "Fair Value / Share": outputs.get(case, {}).get("fair_value_per_share")})
+    rows.append({"Scenario": "Market Price", "Fair Value / Share": market.get("price")})
+    return pd.DataFrame(rows)
+
+
+def validate_scenario_consistency(ctx: dict, state: ScenarioModelState) -> list[str]:
+    warnings = []
+    dcf = state.model_outputs.get("dcf", {})
+    ev_bridge = state.model_outputs.get("ev_bridge", pd.DataFrame())
+    if isinstance(ev_bridge, pd.DataFrame) and not ev_bridge.empty:
+        row = ev_bridge[ev_bridge["Metric"].astype(str) == "Equity value"]
+        if not row.empty and row.iloc[0].get("Value") != dcf.get("equity_value"):
+            warnings.append("EV bridge equity value does not match active scenario output.")
+    forecast = state.model_outputs.get("forecast_table")
+    output_table = state.model_outputs.get("dcf_output_table")
+    if forecast is not None and output_table is not None and not forecast.empty and not output_table.empty:
+        revenue_row = output_table[output_table["Metric"].astype(str) == "Revenue"]
+        if not revenue_row.empty:
+            first_forecast_col = next((col for col in output_table.columns if str(col).endswith(("E", "F"))), None)
+            if first_forecast_col and revenue_row.iloc[0].get(first_forecast_col) != forecast.iloc[0].get("Revenue"):
+                warnings.append("DCF output table revenue forecast does not match active scenario forecast.")
+    return warnings
+
+
 def calculate_assumption_impact(base_assumptions: dict, edited_assumptions: dict, changed_key: str, historicals: pd.DataFrame, market_data: dict) -> dict:
     base_dcf = run_dcf(historicals, market_data, _normalize_assumption_bridge(base_assumptions))
     single_change = _normalize_assumption_bridge({**base_assumptions, changed_key: edited_assumptions.get(changed_key)})
@@ -2855,6 +3092,7 @@ def _append_unique_assumption_changes(ticker: str, changes: list[dict]) -> None:
         return
     st.session_state[state_key] = signature
     st.session_state.setdefault("assumption_update_log", []).extend(changes)
+    st.session_state["pa11r_assumption_change_log"] = list(st.session_state.get("assumption_update_log", []))
 
 
 def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFrame | None) -> None:
@@ -2965,6 +3203,7 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             key=f"assumption_matrix_log_{ticker}",
         )
         st.session_state["assumption_update_log"] = log_df.to_dict("records")
+        st.session_state["pa11r_assumption_change_log"] = log_df.to_dict("records")
     return edited
 
 
@@ -3172,17 +3411,15 @@ def _assumption_editor(ctx: dict) -> dict:
     with scope_col:
         scenario_scope = st.segmented_control(
             "Which case are you editing?",
-            ["User Case", "Base Case", "Bull Case", "Bear Case", "Market-Implied Case"],
+            ["User Case", "Market-Implied Case"],
             default="User Case",
-            help="Choose which valuation case your assumption changes apply to. User Case is recommended. Market-Implied is read-only.",
+            help="User Case is editable. Market-Implied is read-only and used as a benchmark.",
         )
         scenario_scope = scenario_scope or "User Case"
     with compare_col:
         compare_to = st.selectbox("Compare assumption changes against", ["Base Case", "Market-Implied Case", "Prior User Case"], index=0)
 
     st.markdown(f'<span class="pa-pill pa-pill-ok">You are editing: {scenario_scope}</span> <span class="pa-pill">Compare: Current {scenario_scope} vs {compare_to}</span>', unsafe_allow_html=True)
-    if scenario_scope not in {"User Case", "Market-Implied Case"}:
-        st.warning("You are editing a core scenario. Consider using User Case unless you intentionally want to redefine the model framework.")
     if scenario_scope == "Market-Implied Case":
         st.info("Market-Implied Case is read-only. Use it as a benchmark, then copy a scenario to User Case for edits.")
 
@@ -3418,6 +3655,7 @@ def _assumption_editor(ctx: dict) -> dict:
         )
         edited = _apply_active_change_log(base, edited, edited_log.to_dict("records"))
         st.session_state["assumption_update_log"] = edited_log.to_dict("records")
+        st.session_state["pa11r_assumption_change_log"] = edited_log.to_dict("records")
     else:
         st.info("No active assumption changes versus Base Case.")
 
@@ -3539,9 +3777,8 @@ def _source_metadata_for_save(dataset: dict) -> dict:
 
 def _dcf_scenario_outputs(ctx: dict, user_assumptions: dict) -> tuple[dict, dict]:
     market = ctx.get("dataset", {}).get("market_data", {})
-    scenarios = _build_assumption_scenarios(ctx.get("base_assumptions", {}), user_assumptions)
-    market_case = _market_implied_assumptions(ctx.get("reverse", {}), scenarios["Base Case"])
-    scenarios["Market-Implied Case"] = _normalize_assumption_bridge({**scenarios["Base Case"], **{k: v for k, v in market_case.items() if v is not None}})
+    reverse = run_reverse_dcf(market, ctx.get("historicals"), ctx.get("base_assumptions", {}))
+    scenarios = _scenario_assumption_set(ctx.get("base_assumptions", {}), user_assumptions, reverse)
     outputs = {case: run_dcf(ctx.get("historicals"), market, assumptions) for case, assumptions in scenarios.items()}
     return scenarios, outputs
 
@@ -3551,7 +3788,10 @@ def collect_dashboard_state(ctx: dict) -> dict:
     ticker = dataset.get("ticker", "default")
     market = dataset.get("market_data", {})
     user_assumptions = _current_user_assumptions(ctx)
-    dcf_scenarios, dcf_outputs = _dcf_scenario_outputs(ctx, user_assumptions)
+    selected_case = st.session_state.get("pa11r_selected_scenario", "User Case")
+    scenario_state = recalculate_active_scenario(ctx, selected_case, user_assumptions)
+    dcf_scenarios = scenario_state.model_outputs.get("scenario_assumptions", {})
+    dcf_outputs = scenario_state.model_outputs.get("scenario_outputs", {})
     sotp_segments = _current_sotp_segments(ctx)
     sotp_outputs = run_sotp_scenarios(sotp_segments, market, user_assumptions, dcf_outputs.get("User Case"), ctx.get("peer_df"), dataset.get("sector"))
     multiples_basis = st.session_state.get("pa11r_multiples_basis", "Normalized Year")
@@ -3642,6 +3882,7 @@ def restore_analysis_to_session_state(payload: dict, use_saved_market_snapshot: 
     if ticker and user_case:
         st.session_state[_session_key_for_ticker("assumption_user_case", ticker)] = user_case
     st.session_state["assumption_update_log"] = payload.get("dcf", {}).get("assumption_update_log", [])
+    st.session_state["pa11r_assumption_change_log"] = list(st.session_state["assumption_update_log"])
     manual_segments = payload.get("sotp", {}).get("manual_segments", [])
     if ticker and manual_segments:
         st.session_state[f"sotp_{ticker}_segments"] = pd.DataFrame(manual_segments)
@@ -3849,16 +4090,32 @@ def _overview(ctx: dict) -> None:
 
 def _valuation(ctx: dict) -> None:
     market = ctx["dataset"].get("market_data", {})
-    assumptions = _assumption_editor(ctx)
-    user_dcf = run_dcf(ctx["historicals"], market, assumptions)
-    reverse = run_reverse_dcf(market, ctx["historicals"], assumptions)
-    model_table = build_time_axis_financial_model(ctx["historicals"], user_dcf.get("forecast_table"), assumptions)
+    st.markdown('<div class="pa-section-title">Scenario View</div>', unsafe_allow_html=True)
+    selected_case = st.segmented_control(
+        "Scenario View",
+        SCENARIO_CASES,
+        default=st.session_state.get("pa11r_selected_scenario", "User Case"),
+        key="pa11r_selected_scenario_control",
+        help="Select the scenario that powers the valuation cards, bridge, tables, and charts below.",
+    ) or "User Case"
+    st.session_state["pa11r_selected_scenario"] = selected_case
+    edited_user_assumptions = _assumption_editor(ctx)
+    scenario_state = recalculate_active_scenario(ctx, selected_case, edited_user_assumptions)
+    assumptions = scenario_state.active_assumptions
+    user_dcf = scenario_state.model_outputs["dcf"]
+    reverse = scenario_state.model_outputs["active_reverse"]
+    base_reverse = scenario_state.reverse_dcf_outputs
+    model_table = scenario_state.model_outputs["model_table"]
     derivation_log = build_financial_derivation_log(model_table)
-    dcf_output_table = _dcf_forecast_output_table(user_dcf, assumptions, ctx["historicals"])
-    dcf_bridge_table = build_dcf_output_table(user_dcf, assumptions, market)
-    reverse_table = build_reverse_dcf_table(reverse, assumptions, market)
-    ev_bridge = build_ev_to_equity_bridge(market, user_dcf, assumptions)
-    scenario_table = build_scenario_table(ctx["historicals"], market, assumptions)
+    dcf_output_table = scenario_state.model_outputs["dcf_output_table"]
+    dcf_bridge_table = scenario_state.model_outputs["dcf_detail"]
+    reverse_table = scenario_state.model_outputs["reverse_table"]
+    ev_bridge = scenario_state.model_outputs["ev_bridge"]
+    scenario_table = _scenario_comparison_table(
+        scenario_state.model_outputs["scenario_assumptions"],
+        base_reverse,
+        scenario_state.user_assumptions,
+    )
 
     valuation_summary = pd.DataFrame(
         [
@@ -3873,7 +4130,7 @@ def _valuation(ctx: dict) -> None:
     assumptions_table = _assumption_evidence_table(assumptions)
     accounting_flags = _accounting_assumption_flags(ctx.get("accounting_interpretation"), assumptions)
 
-    st.markdown('<div class="pa-section-title">Valuation Readout</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="pa-section-title">Valuation Readout - {html.escape(scenario_state.selected_case)}</div>', unsafe_allow_html=True)
     metric_row(
         [
             ("Fair Value / Share", user_dcf.get("fair_value_per_share"), "per_share"),
@@ -3893,7 +4150,7 @@ def _valuation(ctx: dict) -> None:
         [
             ("Terminal Value % EV", user_dcf.get("terminal_value_weight_pct"), "pct"),
             ("DCF Confidence", ctx.get("accounting_interpretation", {}).get("valuation_confidence"), "text"),
-            ("Reverse DCF", reverse.get("market_case"), "text"),
+            ("Reverse DCF", base_reverse.get("market_case"), "text"),
         ]
     )
     if user_dcf.get("upside_downside_pct") is not None:
@@ -3915,6 +4172,19 @@ def _valuation(ctx: dict) -> None:
             _notice(sanity_warnings[1], "warning")
         with st.expander("Show model sanity checks", expanded=False):
             show_table(pd.DataFrame({"Check": sanity_warnings}), "No model sanity checks.")
+
+    consistency_warnings = validate_scenario_consistency(ctx, scenario_state)
+    if consistency_warnings and st.session_state.get("debug_mode"):
+        with st.expander("Scenario consistency checks", expanded=False):
+            show_table(pd.DataFrame({"Warning": consistency_warnings}), "No scenario consistency warnings.")
+
+    st.markdown('<div class="pa-section-title">User vs Market-Implied Gap</div>', unsafe_allow_html=True)
+    show_table(_assumption_gap_table(scenario_state), "Assumption gap table unavailable.")
+    with st.expander("Scenario Valuation Reference", expanded=False):
+        valuation_chart_data = _scenario_valuation_summary(scenario_state, market)
+        if not valuation_chart_data.empty:
+            st.bar_chart(valuation_chart_data.set_index("Scenario"))
+            show_table(valuation_chart_data, "Scenario valuation unavailable.")
 
     st.markdown('<div class="pa-section-title">EV to Equity Bridge Summary</div>', unsafe_allow_html=True)
     show_table(ev_bridge, "EV bridge unavailable.")
@@ -4684,6 +4954,7 @@ def _clause_annotation_map(ctx: dict) -> None:
         if st.button("Send to DCF assumption log"):
             update = create_pending_assumption_update({**selected_row, "user_note": note})
             st.session_state.setdefault("assumption_update_log", []).append(update)
+            st.session_state["pa11r_assumption_change_log"] = list(st.session_state.get("assumption_update_log", []))
             st.json(update)
     comparison = compare_clause_to_reverse_dcf(selected_row, ctx.get("reverse", {}))
     st.write("Reverse DCF check:", comparison.get("interpretation"))
@@ -4743,13 +5014,15 @@ def _pa11r_snapshot(ctx: dict) -> None:
     dataset = ctx["dataset"]
     market = dataset.get("market_data", {})
     scoring = ctx["scoring"]
-    dcf = ctx["base_dcf"]
-    reverse = ctx["reverse"]
+    selected_case = st.session_state.get("pa11r_selected_scenario", "User Case")
+    scenario_state = recalculate_active_scenario(ctx, selected_case)
+    dcf = scenario_state.model_outputs.get("dcf", {})
+    reverse = scenario_state.reverse_dcf_outputs
     moat = ctx["moat"]
     investment_status = "supportive" if scoring.get("recommendation") == "Buy" else "warning" if scoring.get("recommendation") == "Avoid" else "caution"
     swing_view, swing_subtitle, swing_status = _swing_view(ctx)
     regime, regime_subtitle, regime_status = _market_regime(ctx)
-    valuation_view, valuation_subtitle, valuation_status = _valuation_view(ctx)
+    valuation_view, valuation_subtitle, valuation_status = _valuation_view(ctx, scenario_state)
     risk_level, risk_subtitle, risk_status = _risk_level(ctx)
     confidence, confidence_subtitle, confidence_status = _data_confidence(ctx)
     moat_class = _clean_classification(moat.get("classification"))
@@ -4790,7 +5063,9 @@ def _pa11r_snapshot(ctx: dict) -> None:
         "DCF, SOTP, and multiples are separate lenses. The snapshot only accepts the valuation read when they can be reconciled.",
         "DCF / SOTP / Multiples",
     )
-    render_status_grid(_snapshot_valuation_cards(ctx))
+    render_status_grid(_snapshot_valuation_cards(ctx, scenario_state))
+    with st.expander("Top assumption gaps vs Market-Implied", expanded=False):
+        show_table(_assumption_gap_table(scenario_state).head(4), "No market-implied gaps available.")
 
     c1, c2 = st.columns([0.58, 0.42])
     with c1:
@@ -4806,10 +5081,10 @@ def _pa11r_snapshot(ctx: dict) -> None:
         show_table(_capex_snapshot_table(ctx), "CAPEX summary unavailable.")
         _accounting_reality_compact(ctx)
 
-    render_decision_summary(_decision_summary(ctx))
+    render_decision_summary(_decision_summary(ctx, scenario_state))
     with st.expander("One-page tear sheet", expanded=False):
-        render_tearsheet(_tearsheet_summary(ctx))
-        render_copy_summary(_tearsheet_summary(ctx))
+        render_tearsheet(_tearsheet_summary(ctx, scenario_state))
+        render_copy_summary(_tearsheet_summary(ctx, scenario_state))
 
 
 def _company_story_context(ctx: dict) -> None:
@@ -4884,6 +5159,7 @@ def _assumption_update_log_editor(ctx: dict, key_prefix: str = "evidence") -> No
         key=f"{key_prefix}_assumption_update_editor",
     )
     st.session_state["assumption_update_log"] = edited.to_dict("records")
+    st.session_state["pa11r_assumption_change_log"] = edited.to_dict("records")
 
 
 def _assumption_workbench(ctx: dict, key_prefix: str = "evidence") -> None:
@@ -4936,6 +5212,7 @@ def _assumption_workbench(ctx: dict, key_prefix: str = "evidence") -> None:
                 "status": "inactive",
             }
         )
+        st.session_state["pa11r_assumption_change_log"] = list(st.session_state.get("assumption_update_log", []))
         st.success("Assumption update added to the editable log.")
     _assumption_update_log_editor(ctx, key_prefix=key_prefix)
 
