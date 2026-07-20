@@ -134,6 +134,35 @@ def test_time_axis_first_visible_change_uses_hidden_prior_period():
     assert gross_profit_change == 0.25
 
 
+def test_time_axis_does_not_create_synthetic_ltm_from_latest_annual():
+    historicals = pd.DataFrame(
+        [
+            {"Period": "FY 2024", "Revenue": 900.0, "Gross Profit": 450.0, "Gross Margin": 0.5, "EBIT": 100.0, "OCF": 120.0, "Total CAPEX": 20.0, "Diluted Shares": 100.0},
+            {"Period": "FY 2025", "Revenue": 1000.0, "Gross Profit": 500.0, "Gross Margin": 0.5, "EBIT": 110.0, "OCF": 130.0, "Total CAPEX": 25.0, "Diluted Shares": 100.0},
+        ]
+    )
+
+    model = build_time_axis_financial_model(historicals, pd.DataFrame(), {"tax_rate": 0.21})
+
+    assert "LTM Latest" not in model.columns
+    assert round(model.loc[model["Line Item"] == "Revenue growth %", "FY2025A"].iloc[0], 4) == 0.1111
+
+
+def test_time_axis_true_ltm_uses_prior_period_for_growth():
+    historicals = pd.DataFrame(
+        [
+            {"Period": "FY 2025", "Revenue": 1000.0, "Gross Profit": 500.0, "Gross Margin": 0.5, "EBIT": 110.0, "OCF": 130.0, "Total CAPEX": 25.0, "Diluted Shares": 100.0},
+            {"Period": "LTM Latest", "Revenue": 1200.0, "Gross Profit": 600.0, "Gross Margin": 0.5, "EBIT": 132.0, "OCF": 156.0, "Total CAPEX": 30.0, "Diluted Shares": 101.0},
+        ]
+    )
+
+    model = build_time_axis_financial_model(historicals, pd.DataFrame(), {"tax_rate": 0.21})
+
+    assert "LTM Latest" in model.columns
+    assert model.loc[model["Line Item"] == "Revenue growth %", "LTM Latest"].iloc[0] == 0.2
+    assert model.loc[model["Line Item"] == "Diluted shares growth %", "LTM Latest"].iloc[0] == 0.01
+
+
 def test_mixed_object_columns_keep_numeric_formatting():
     frame = pd.DataFrame(
         [

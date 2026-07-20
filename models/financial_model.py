@@ -340,6 +340,11 @@ def _year_from_period(period: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _is_ltm_period(period: str) -> bool:
+    text = str(period or "").lower()
+    return any(token in text for token in ["ltm", "ttm", "trailing", "latest"])
+
+
 def _safe_div(numerator, denominator):
     if numerator is None or denominator is None:
         return None
@@ -359,6 +364,8 @@ def _safe_delta_pct(current, previous):
 
 
 def _actual_label(period: str) -> str:
+    if _is_ltm_period(period):
+        return "LTM Latest"
     year = _year_from_period(period)
     return f"FY{year}A" if year else str(period or "Actual")
 
@@ -539,9 +546,6 @@ def build_time_axis_financial_model(historicals: pd.DataFrame, forecast_table: p
         rows_by_period[label] = _actual_model_values(row, prior_revenue=prior_revenue, prior_shares=prior_shares)
         prior_revenue = row.get("Revenue")
         prior_shares = row.get("Diluted Shares")
-    if not actuals.empty:
-        latest_row = actuals.iloc[-1]
-        rows_by_period["LTM Latest"] = _actual_model_values(latest_row, prior_revenue=None, prior_shares=None)
     if forecast_table is not None and not forecast_table.empty:
         for _, row in forecast_table.iterrows():
             year_index = int(row.get("Year") or len(rows_by_period) + 1)
