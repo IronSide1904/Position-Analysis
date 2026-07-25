@@ -79,6 +79,60 @@ def test_dcf_accepts_year_specific_forecast_assumptions():
     assert forecast.iloc[1]["OCF Margin"] == 0.30
 
 
+def test_year_specific_opex_flows_to_ebit_nopat_and_fair_value():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    low_opex = {
+        **assumptions,
+        "forecast_assumptions_by_year": {"1": {"opex_pct_revenue": 0.20}},
+    }
+    high_opex = {
+        **assumptions,
+        "forecast_assumptions_by_year": {"1": {"opex_pct_revenue": 0.40}},
+    }
+
+    low = run_dcf(historicals, market, low_opex)
+    high = run_dcf(historicals, market, high_opex)
+    low_first = low["forecast_table"].iloc[0]
+    high_first = high["forecast_table"].iloc[0]
+
+    assert high_first["OPEX"] > low_first["OPEX"]
+    assert high_first["EBIT"] < low_first["EBIT"]
+    assert high_first["NOPAT"] < low_first["NOPAT"]
+    assert high["fair_value_per_share"] < low["fair_value_per_share"]
+
+
+def test_growth_capex_flows_to_fcf_and_fair_value():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    light_reinvestment = {**assumptions, "growth_capex_pct_revenue": 0.01}
+    heavy_reinvestment = {**assumptions, "growth_capex_pct_revenue": 0.12}
+
+    light = run_dcf(historicals, market, light_reinvestment)
+    heavy = run_dcf(historicals, market, heavy_reinvestment)
+
+    assert heavy["forecast_table"].iloc[0]["Total CAPEX"] > light["forecast_table"].iloc[0]["Total CAPEX"]
+    assert heavy["forecast_table"].iloc[0]["FCF"] < light["forecast_table"].iloc[0]["FCF"]
+    assert heavy["fair_value_per_share"] < light["fair_value_per_share"]
+
+
+def test_ocf_margin_flows_to_fcf_when_ocf_basis_selected():
+    historicals = sample_historicals()
+    market = {"price": 10.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    weak_cash = {**assumptions, "dcf_mode": "FCF", "ocf_margin": 0.08}
+    strong_cash = {**assumptions, "dcf_mode": "FCF", "ocf_margin": 0.28}
+
+    weak = run_dcf(historicals, market, weak_cash)
+    strong = run_dcf(historicals, market, strong_cash)
+
+    assert strong["forecast_table"].iloc[0]["OCF"] > weak["forecast_table"].iloc[0]["OCF"]
+    assert strong["forecast_table"].iloc[0]["FCF"] > weak["forecast_table"].iloc[0]["FCF"]
+    assert strong["fair_value_per_share"] > weak["fair_value_per_share"]
+
+
 def test_dcf_forecast_explicitly_models_reinvestment_lines():
     historicals = sample_historicals()
     market = {"price": 10.0, "shares_outstanding": 100.0}

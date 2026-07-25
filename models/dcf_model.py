@@ -105,7 +105,8 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
     tax_rate = float(assumptions.get("tax_rate", DCF_DEFAULTS["tax_rate"]))
     gross_margin = float(assumptions.get("gross_margin", 0.45))
     opex_pct = float(assumptions.get("opex_pct_revenue", max(gross_margin - float(assumptions.get("operating_margin", 0.15)), 0.0)))
-    operating_margin = float(assumptions.get("operating_margin", gross_margin - opex_pct))
+    operating_margin = gross_margin - opex_pct
+    use_direct_nopat_override = bool(assumptions.get("use_direct_nopat_override", False))
     nopat_margin = float(assumptions.get("nopat_margin", operating_margin * (1 - tax_rate)))
     ocf_margin = float(assumptions.get("ocf_margin", 0.18))
     maintenance_capex_pct = float(assumptions.get("maintenance_capex_pct_revenue", 0.03))
@@ -121,6 +122,7 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
     wacc = max(float(assumptions.get("wacc", DCF_DEFAULTS["wacc"])), 0.001)
     terminal_growth = float(assumptions.get("terminal_growth", DCF_DEFAULTS["terminal_growth"]))
     terminal_multiple = float(assumptions.get("terminal_multiple", DCF_DEFAULTS["terminal_multiple"]))
+    terminal_value_method = str(assumptions.get("terminal_value_method", "Blended")).strip() or "Blended"
     shares = float(assumptions.get("diluted_shares") or _latest(historicals, "Diluted Shares") or market_data.get("shares_outstanding") or 0)
     net_debt = float(assumptions.get("net_debt") if assumptions.get("net_debt") is not None else _latest(historicals, "Net Debt"))
     mos = float(assumptions.get("margin_of_safety", DCF_DEFAULTS["margin_of_safety"]))
@@ -134,8 +136,11 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         year_tax_rate = float(_yearly_assumption(assumptions, year, "tax_rate", tax_rate))
         year_gross_margin = float(_yearly_assumption(assumptions, year, "gross_margin", gross_margin))
         year_opex_pct = float(_yearly_assumption(assumptions, year, "opex_pct_revenue", opex_pct))
-        year_operating_margin = float(_yearly_assumption(assumptions, year, "operating_margin", year_gross_margin - year_opex_pct))
-        year_nopat_margin = float(_yearly_assumption(assumptions, year, "nopat_margin", year_operating_margin * (1 - year_tax_rate)))
+        year_operating_margin = year_gross_margin - year_opex_pct
+        if use_direct_nopat_override:
+            year_nopat_margin = float(_yearly_assumption(assumptions, year, "nopat_margin", nopat_margin))
+        else:
+            year_nopat_margin = year_operating_margin * (1 - year_tax_rate)
         year_ocf_margin = float(_yearly_assumption(assumptions, year, "ocf_margin", ocf_margin))
         year_da_pct = float(_yearly_assumption(assumptions, year, "depreciation_amortization_pct_revenue", da_pct))
         year_maintenance_capex_pct = float(_yearly_assumption(assumptions, year, "maintenance_capex_pct_revenue", maintenance_capex_pct))
@@ -148,9 +153,12 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
 
         current_revenue *= 1 + year_revenue_cagr
         gross_profit = current_revenue * year_gross_margin
+        cogs = current_revenue - gross_profit
         opex = current_revenue * year_opex_pct
-        ebit = current_revenue * year_operating_margin
-        nopat = current_revenue * year_nopat_margin
+        ebit = gross_profit - opex
+        tax_expense = max(ebit, 0.0) * year_tax_rate
+        nopat = current_revenue * year_nopat_margin if use_direct_nopat_override else ebit - tax_expense
+        year_nopat_margin = nopat / current_revenue if current_revenue else None
         da = current_revenue * year_da_pct
         ocf = current_revenue * year_ocf_margin
         effective_growth_capex_pct = year_growth_capex_pct
@@ -161,12 +169,12 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         growth_capex = current_revenue * effective_growth_capex_pct
         capex = maintenance_capex + growth_capex
         working_capital = current_revenue * year_working_capital_pct
-        fcff = nopat + da - maintenance_capex - working_capital
+        fcff = nopat + da - capex - working_capital
         normalized_cash_earnings = ocf - maintenance_capex
         if dcf_mode == "FCFF":
             fcf = fcff
         elif dcf_mode == "NOPAT":
-            fcf = nopat
+            fcf = nopat + da - capex - working_capital
         else:
             fcf = ocf - capex
         pv = fcf / ((1 + wacc) ** year)
@@ -178,12 +186,14 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
                 "Revenue Growth": year_revenue_cagr,
                 "Gross Margin": year_gross_margin,
                 "COGS % Revenue": 1 - year_gross_margin,
+                "COGS": -abs(cogs),
                 "Gross Profit": gross_profit,
                 "OPEX % Revenue": year_opex_pct,
                 "OPEX": opex,
                 "EBIT": ebit,
                 "EBIT Margin": year_operating_margin,
                 "Tax Rate": year_tax_rate,
+                "Tax Expense": tax_expense,
                 "D&A": da,
                 "D&A % Revenue": year_da_pct,
                 "NOPAT": nopat,
@@ -213,7 +223,16 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
     final_fcf = rows[-1]["FCF"] if rows else 0
     terminal_gordon = final_fcf * (1 + terminal_growth) / max(wacc - terminal_growth, 0.001)
     terminal_exit = final_fcf * terminal_multiple
-    terminal_value = (terminal_gordon + terminal_exit) / 2
+    method_key = terminal_value_method.lower()
+    if "gordon" in method_key:
+        terminal_value = terminal_gordon
+        terminal_method_label = "Gordon Growth"
+    elif "exit" in method_key:
+        terminal_value = terminal_exit
+        terminal_method_label = "Exit Multiple"
+    else:
+        terminal_value = (terminal_gordon + terminal_exit) / 2
+        terminal_method_label = "Blended: Gordon Growth + Exit Multiple"
     pv_terminal = terminal_value / ((1 + wacc) ** years)
     enterprise_value = sum(discounted_fcfs) + pv_terminal
     equity_value = enterprise_value - net_debt
@@ -236,6 +255,10 @@ def run_dcf(historicals: pd.DataFrame, market_data: dict, assumptions: dict) -> 
         "buy_price_after_margin_of_safety": buy_price,
         "upside_downside_pct": upside,
         "terminal_value": terminal_value,
+        "terminal_gordon_value": terminal_gordon,
+        "terminal_exit_multiple_value": terminal_exit,
+        "terminal_value_method": terminal_method_label,
+        "terminal_metric": "Final forecast FCF",
         "discounted_terminal_value": pv_terminal,
         "terminal_value_weight_pct": tv_weight,
         "dcf_mode": dcf_mode,

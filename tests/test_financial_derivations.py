@@ -221,10 +221,10 @@ def test_assumption_matrix_separates_actuals_from_forecast_assumptions():
     assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2026E"].iloc[0] == "55.0%"
     assert matrix.loc[matrix["Row Key"] == "maintenance_capex_pct_revenue", "FY2025A"].iloc[0] == "3.0%"
     assert matrix.loc[matrix["Row Key"] == "growth_capex_pct_revenue", "FY2025A"].iloc[0] == "2.0%"
-    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "working_capital_pct_revenue", "FY2025A"].iloc[0] == "Unavailable"
     assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2025A"].iloc[0] == "4.0%"
     assert matrix.loc[matrix["Row Key"] == "sbc_pct_revenue", "FY2026E"].iloc[0] == "0.0%"
-    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "diluted_share_growth", "LTM Latest"].iloc[0] == "Unavailable"
     assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "Evidence"].iloc[0] == "Mixed"
     assert matrix.attrs["cell_evidence"]["revenue_cagr|FY2025A"]["evidence_grade"] == "Calculated"
     assert matrix.attrs["cell_evidence"]["revenue_cagr|FY2026E"]["evidence_grade"] == "Scenario-based"
@@ -249,13 +249,13 @@ def test_assumption_matrix_does_not_backfill_missing_actuals_with_forecast_defau
 
     matrix, _, _ = _build_assumption_matrix(assumptions, pd.DataFrame([{"Period": "FY 2025"}]), model_table)
 
-    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2025A"].iloc[0] == "Unavailable"
     assert matrix.loc[matrix["Row Key"] == "revenue_cagr", "FY2026E"].iloc[0] == "8.0%"
-    assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2025A"].iloc[0] == "Unavailable"
     assert matrix.loc[matrix["Row Key"] == "cogs_pct_revenue", "FY2026E"].iloc[0] == "55.0%"
-    assert matrix.loc[matrix["Row Key"] == "opex_pct_revenue", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "opex_pct_revenue", "FY2025A"].iloc[0] == "Unavailable"
     assert matrix.loc[matrix["Row Key"] == "opex_pct_revenue", "FY2026E"].iloc[0] == "30.0%"
-    assert matrix.loc[matrix["Row Key"] == "ocf_margin", "FY2025A"].iloc[0] == "n.m."
+    assert matrix.loc[matrix["Row Key"] == "ocf_margin", "FY2025A"].iloc[0] == "Unavailable"
     assert matrix.loc[matrix["Row Key"] == "ocf_margin", "FY2026E"].iloc[0] == "16.0%"
 
 

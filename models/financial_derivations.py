@@ -72,7 +72,7 @@ def _as_float(value: Any) -> float | None:
         return None
     if isinstance(value, str):
         stripped = value.strip()
-        if stripped.lower() in {"", "unavailable", "none", "nan", "inf", "-inf", "n.m.", "nm"}:
+        if stripped.lower() in {"", "unavailable", "none", "nan", "inf", "-inf", "n.m.", "nm", "not meaningful", "not applicable", "not calculated"}:
             return None
         stripped = stripped.replace("$", "").replace(",", "").replace("x", "")
         is_percent = stripped.endswith("%")
@@ -407,9 +407,9 @@ def add_percentage_change_rows(
             if previous is None:
                 pct_row[period] = None
             elif current is None or abs(previous) < 1e-12:
-                pct_row[period] = "n.m."
+                pct_row[period] = "Not meaningful"
             elif previous < 0 < current or current < 0 < previous:
-                pct_row[period] = "n.m."
+                pct_row[period] = "Not meaningful"
             else:
                 pct_row[period] = current / previous - 1
             previous = current

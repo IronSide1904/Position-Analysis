@@ -12,6 +12,7 @@ from analysis.capex_ocf_nopat import analyze_capex_ocf_nopat_quality
 from analysis.clauses import extract_relevant_clauses
 from analysis.clause_pipeline import run_clause_extraction_pipeline
 from analysis.compensation import analyze_compensation_alignment
+from analysis.company_story import build_pa11_story
 from analysis.guidance import analyze_guidance_accuracy
 from analysis.ma_strategy import analyze_ma_strategy
 from analysis.management import analyze_management_and_board
@@ -56,6 +57,7 @@ from models.financial_model import (
     build_source_evidence_table,
     build_time_axis_financial_model,
 )
+from models.operating_model import OPERATING_MODEL_DEPENDENCIES
 from models.operating_driver_model import (
     MODEL_TYPES,
     build_business_model_profile,
@@ -72,6 +74,7 @@ from models.reverse_dcf import compare_clause_to_reverse_dcf, run_reverse_dcf
 from models.scoring import score_investment
 from models.sotp_model import build_default_segment_data, run_sotp, run_sotp_scenarios, sotp_summary_table
 from models.multiples_model import calculate_current_multiples, calculate_scenario_implied_multiples, peer_median_multiples, sector_median_multiples
+from models.terminal_value import recommend_terminal_multiple
 from ui.charts import (
     dcf_sensitivity_heatmap,
     fcf_projection_chart,
@@ -88,6 +91,7 @@ from ui.charts import (
     scenario_valuation_bar,
 )
 from ui.components import fmt_money, fmt_pct, format_dataframe_for_display, metric_row, show_table, show_warnings
+from ui.assumption_workbench import render_editable_assumption_table
 from ui.financial_charts import render_financial_line_chart
 from ui.design_system import (
     apply_design_system,
@@ -1675,7 +1679,7 @@ def _format_financial_table_for_display(df: pd.DataFrame) -> pd.DataFrame:
     display = format_dataframe_for_display(df)
     if display is None or display.empty:
         return display
-    return display.replace({UNAVAILABLE: "n.m.", "Unavailable": "n.m."}).fillna("n.m.")
+    return display.replace({"n.m.": "Not meaningful", "nan": UNAVAILABLE, "None": UNAVAILABLE}).fillna(UNAVAILABLE)
 
 
 def _show_financial_table(df: pd.DataFrame, empty_message: str = "Financial table unavailable.") -> None:
@@ -1768,6 +1772,15 @@ def _add_latest_actual_dcf_column(rows_by_metric: dict, historicals: pd.DataFram
     revenue = value("Revenue")
     prior_revenue = prior.get("Revenue") if prior is not None and "Revenue" in prior else None
     revenue_growth = _ratio_or_none(float(revenue or 0) - float(prior_revenue or 0), prior_revenue) if prior_revenue else None
+    gross_profit = value("Gross Profit")
+    gross_margin = _ratio_or_none(gross_profit, revenue)
+    if gross_profit is None and revenue is not None and assumptions.get("gross_margin") is not None:
+        gross_profit = float(revenue) * float(assumptions.get("gross_margin") or 0)
+        gross_margin = _ratio_or_none(gross_profit, revenue)
+    cogs = float(revenue or 0) - float(gross_profit or 0) if revenue is not None and gross_profit is not None else value("COGS")
+    opex = value("OPEX")
+    if opex is None and revenue is not None and assumptions.get("opex_pct_revenue") is not None:
+        opex = float(revenue) * float(assumptions.get("opex_pct_revenue") or 0)
     ebit = value("EBIT")
     tax_rate = value("Tax Rate")
     if tax_rate is None:
@@ -1775,6 +1788,7 @@ def _add_latest_actual_dcf_column(rows_by_metric: dict, historicals: pd.DataFram
     nopat = value("NOPAT")
     if nopat is None and ebit is not None and tax_rate is not None:
         nopat = float(ebit) * (1 - float(tax_rate))
+    tax_expense = max(float(ebit or 0), 0) * float(tax_rate or 0) if ebit is not None else None
     da = value("D&A")
     if da is None and value("EBITDA") is not None and ebit is not None:
         da = max(float(value("EBITDA") or 0) - float(ebit or 0), 0)
@@ -1798,10 +1812,18 @@ def _add_latest_actual_dcf_column(rows_by_metric: dict, historicals: pd.DataFram
 
     rows_by_metric["Revenue"][column] = revenue
     rows_by_metric["Revenue Growth %"][column] = revenue_growth
+    rows_by_metric["COGS / Cost of Sales"][column] = cogs
+    rows_by_metric["COGS % Revenue"][column] = _ratio_or_none(cogs, revenue)
+    rows_by_metric["Gross Profit"][column] = gross_profit
+    rows_by_metric["Gross Margin %"][column] = gross_margin
+    rows_by_metric["Total OPEX"][column] = opex
+    rows_by_metric["OPEX % Revenue"][column] = _ratio_or_none(opex, revenue)
     rows_by_metric["EBIT"][column] = ebit
     rows_by_metric["EBIT Margin %"][column] = _ratio_or_none(ebit, revenue)
     rows_by_metric["Tax Rate"][column] = tax_rate
+    rows_by_metric["Tax Expense"][column] = tax_expense
     rows_by_metric["NOPAT"][column] = nopat
+    rows_by_metric["NOPAT Margin %"][column] = _ratio_or_none(nopat, revenue)
     rows_by_metric["D&A"][column] = da
     rows_by_metric["D&A % Revenue"][column] = _ratio_or_none(da, revenue)
     rows_by_metric["OCF"][column] = ocf
@@ -1814,6 +1836,10 @@ def _add_latest_actual_dcf_column(rows_by_metric: dict, historicals: pd.DataFram
     rows_by_metric["Total CAPEX % Revenue"][column] = _ratio_or_none(total_capex, revenue)
     rows_by_metric["Working Capital"][column] = working_capital
     rows_by_metric["Working Capital % Revenue"][column] = _ratio_or_none(working_capital, revenue)
+    rows_by_metric["SBC"][column] = value("SBC")
+    rows_by_metric["SBC % Revenue"][column] = _ratio_or_none(value("SBC"), revenue)
+    rows_by_metric["Diluted Shares"][column] = value("Diluted Shares")
+    rows_by_metric["Diluted Share Growth %"][column] = _ratio_or_none(float(value("Diluted Shares") or 0) - float(prior.get("Diluted Shares") or 0), prior.get("Diluted Shares")) if prior is not None else None
     rows_by_metric["FCF"][column] = fcf
     rows_by_metric["FCF Margin %"][column] = _ratio_or_none(fcf, revenue)
     rows_by_metric["FCFF"][column] = fcff
@@ -1827,10 +1853,18 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
     metrics = [
         "Revenue",
         "Revenue Growth %",
+        "COGS / Cost of Sales",
+        "COGS % Revenue",
+        "Gross Profit",
+        "Gross Margin %",
+        "Total OPEX",
+        "OPEX % Revenue",
         "EBIT",
         "EBIT Margin %",
         "Tax Rate",
+        "Tax Expense",
         "NOPAT",
+        "NOPAT Margin %",
         "D&A",
         "D&A % Revenue",
         "OCF",
@@ -1843,15 +1877,23 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
         "Total CAPEX % Revenue",
         "Working Capital",
         "Working Capital % Revenue",
+        "SBC",
+        "SBC % Revenue",
+        "Diluted Shares",
+        "Diluted Share Growth %",
         "FCF",
         "FCF Margin %",
         "FCFF",
         "Discount Factor",
         "Discounted FCF / FCFF",
+        "Terminal Metric",
+        "Terminal Method",
+        "Selected Terminal Multiple",
         "Terminal Value",
         "Discounted Terminal Value",
+        "Terminal Value Weight",
     ]
-    rows = [{"Metric": metric} for metric in metrics]
+    rows = [{"Metric": metric, "Row Type": "Locked Output", "Terminal": "Not applicable"} for metric in metrics]
     row_by_metric = {row["Metric"]: row for row in rows}
     prior_revenue = _add_latest_actual_dcf_column(row_by_metric, historicals, assumptions)
     for _, row in forecast.iterrows():
@@ -1867,6 +1909,10 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
         ebit = row.get("EBIT")
         if ebit is None:
             ebit = nopat / max(1 - tax_rate, 0.01) if nopat is not None else None
+        gross_profit = row.get("Gross Profit")
+        cogs = (revenue - gross_profit) if revenue is not None and gross_profit is not None else None
+        opex = row.get("OPEX")
+        tax_expense = max(ebit or 0, 0) * tax_rate if ebit is not None else None
         da = row.get("D&A")
         ocf = row.get("OCF")
         maintenance_capex = row.get("Maintenance CAPEX")
@@ -1875,12 +1921,21 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
         working_capital = row.get("Working Capital Investment")
         fcf = row.get("FCF")
         fcff = row.get("FCFF")
+        shares = row.get("Diluted Shares")
         row_by_metric["Revenue"][column] = revenue
         row_by_metric["Revenue Growth %"][column] = revenue_growth
+        row_by_metric["COGS / Cost of Sales"][column] = cogs
+        row_by_metric["COGS % Revenue"][column] = row.get("COGS % Revenue", cogs / revenue if revenue else None)
+        row_by_metric["Gross Profit"][column] = gross_profit
+        row_by_metric["Gross Margin %"][column] = row.get("Gross Margin", gross_profit / revenue if revenue else None)
+        row_by_metric["Total OPEX"][column] = opex
+        row_by_metric["OPEX % Revenue"][column] = row.get("OPEX % Revenue", opex / revenue if revenue else None)
         row_by_metric["EBIT"][column] = ebit
         row_by_metric["EBIT Margin %"][column] = row.get("EBIT Margin", ebit / revenue if revenue else None)
         row_by_metric["Tax Rate"][column] = tax_rate
+        row_by_metric["Tax Expense"][column] = tax_expense
         row_by_metric["NOPAT"][column] = nopat
+        row_by_metric["NOPAT Margin %"][column] = row.get("NOPAT Margin", nopat / revenue if revenue else None)
         row_by_metric["D&A"][column] = da
         row_by_metric["D&A % Revenue"][column] = row.get("D&A % Revenue", da / revenue if revenue else None)
         row_by_metric["OCF"][column] = ocf
@@ -1893,13 +1948,23 @@ def _dcf_forecast_output_table(dcf_output: dict, assumptions: dict, historicals:
         row_by_metric["Total CAPEX % Revenue"][column] = row.get("Total CAPEX % Revenue", total_capex / revenue if revenue else None)
         row_by_metric["Working Capital"][column] = working_capital
         row_by_metric["Working Capital % Revenue"][column] = row.get("Working Capital % Revenue", working_capital / revenue if revenue else None)
+        row_by_metric["SBC"][column] = row.get("SBC")
+        row_by_metric["SBC % Revenue"][column] = row.get("SBC % Revenue")
+        row_by_metric["Diluted Shares"][column] = shares
+        row_by_metric["Diluted Share Growth %"][column] = row.get("Diluted Share Growth")
         row_by_metric["FCF"][column] = fcf
         row_by_metric["FCF Margin %"][column] = fcf / revenue if revenue else None
         row_by_metric["FCFF"][column] = fcff
         row_by_metric["Discount Factor"][column] = discount_factor
         row_by_metric["Discounted FCF / FCFF"][column] = row.get("PV FCF")
+    terminal_method = dcf_output.get("terminal_value_method") or assumptions.get("terminal_value_method") or ("Blended: Gordon Growth + Exit Multiple")
+    terminal_metric = f"{dcf_output.get('terminal_metric') or 'Final forecast FCF'}: {fmt_money(forecast.iloc[-1].get('FCF'))}" if not forecast.empty else "Unavailable"
+    row_by_metric["Terminal Metric"]["Terminal"] = terminal_metric
+    row_by_metric["Terminal Method"]["Terminal"] = terminal_method
+    row_by_metric["Selected Terminal Multiple"]["Terminal"] = fmt_multiple(assumptions.get("terminal_multiple"))
     row_by_metric["Terminal Value"]["Terminal"] = dcf_output.get("terminal_value")
     row_by_metric["Discounted Terminal Value"]["Terminal"] = dcf_output.get("discounted_terminal_value")
+    row_by_metric["Terminal Value Weight"]["Terminal"] = dcf_output.get("terminal_value_weight_pct")
     return pd.DataFrame(rows)
 
 
@@ -3258,7 +3323,7 @@ def _display_assumption_number(value, unit: str):
 
 def _display_assumption_cell(value, unit: str) -> str:
     if value is None:
-        return "n.m."
+        return "Unavailable"
     return format_assumption_value(value, _matrix_unit_to_assumption_unit(unit))
 
 
@@ -3312,6 +3377,7 @@ def _build_assumption_matrix(
         row = {
             "Row Key": row_key,
             "Assumption": meta["label"],
+            "Row Type": "Input",
         }
         for label in actual_labels:
             actual_value = _assumption_actual_value(row_key, model_table, label, assumptions)
@@ -3348,7 +3414,7 @@ def _build_assumption_matrix(
         row["Evidence"] = evidence_grades.pop() if len(evidence_grades) == 1 else "Mixed"
         row["Confidence"] = confidences.pop() if len(confidences) == 1 else "Mixed"
         rows.append(row)
-    ordered_cols = ["Row Key", "Assumption", "Evidence", "Confidence", *actual_labels, *forecast_labels]
+    ordered_cols = ["Row Key", "Assumption", "Row Type", "Evidence", "Confidence", *actual_labels, *forecast_labels]
     matrix = pd.DataFrame(rows)[ordered_cols]
     matrix.attrs["cell_evidence"] = cell_evidence
     matrix.attrs["cell_metadata"] = cell_metadata
@@ -3421,6 +3487,7 @@ def _build_valuation_assumption_table(assumptions: dict) -> pd.DataFrame:
             {
                 "Row Key": row_key,
                 "Assumption": meta["label"],
+                "Row Type": "Input",
                 "Value": _display_assumption_cell(value, meta["unit"]),
                 "Evidence": meta["source"],
             }
@@ -3526,6 +3593,52 @@ def _assumption_matrix_quality_warnings(matrix: pd.DataFrame, actual_labels: lis
     return warnings
 
 
+def _pending_model_impact_rows(old_dcf: dict, preview_dcf: dict) -> list[dict]:
+    old_forecast = old_dcf.get("forecast_table", pd.DataFrame()) if isinstance(old_dcf, dict) else pd.DataFrame()
+    new_forecast = preview_dcf.get("forecast_table", pd.DataFrame()) if isinstance(preview_dcf, dict) else pd.DataFrame()
+    old_last = old_forecast.iloc[-1] if isinstance(old_forecast, pd.DataFrame) and not old_forecast.empty else {}
+    new_last = new_forecast.iloc[-1] if isinstance(new_forecast, pd.DataFrame) and not new_forecast.empty else {}
+
+    def value(source, key):
+        return source.get(key) if hasattr(source, "get") else None
+
+    metrics = [
+        ("Revenue", old_last, new_last, "Revenue"),
+        ("Total OPEX", old_last, new_last, "OPEX"),
+        ("EBIT", old_last, new_last, "EBIT"),
+        ("NOPAT", old_last, new_last, "NOPAT"),
+        ("OCF", old_last, new_last, "OCF"),
+        ("Total CAPEX", old_last, new_last, "Total CAPEX"),
+        ("FCF", old_last, new_last, "FCF"),
+        ("Fair Value / Share", old_dcf, preview_dcf, "fair_value_per_share"),
+    ]
+    rows = []
+    for label, old_source, new_source, key in metrics:
+        old_value = value(old_source, key)
+        new_value = value(new_source, key)
+        delta = new_value - old_value if old_value is not None and new_value is not None else None
+        rows.append({"Metric": label, "Old": old_value, "Preview": new_value, "Delta": delta})
+    return rows
+
+
+def _terminal_multiple_guide(ctx: dict, assumptions: dict, dcf_output: dict) -> pd.DataFrame:
+    peer_medians, _warnings = peer_median_multiples(ctx.get("peer_df"), ctx.get("dataset", {}).get("sector"), ctx.get("dataset", {}).get("industry"))
+    sector = sector_median_multiples(ctx.get("dataset", {}).get("sector"), ctx.get("dataset", {}).get("industry"))
+    reverse = ctx.get("reverse", {})
+    selected = assumptions.get("terminal_multiple")
+    return pd.DataFrame(
+        [
+            {"Reference": "Bear Case", "EV/Revenue": None, "EV/EBITDA": max((selected or 12) - 2, 1), "EV/EBIT": max((selected or 12) - 2, 1), "EV/OCF": max((selected or 12) - 2, 1), "EV/FCF": max((selected or 12) - 2, 1), "P/E": None, "Notes": "Conservative assumptions"},
+            {"Reference": "Base Case", "EV/Revenue": None, "EV/EBITDA": selected, "EV/EBIT": selected, "EV/OCF": selected, "EV/FCF": selected, "P/E": None, "Notes": "Normalized assumptions"},
+            {"Reference": "Bull Case", "EV/Revenue": None, "EV/EBITDA": (selected or 12) + 2, "EV/EBIT": (selected or 12) + 2, "EV/OCF": (selected or 12) + 2, "EV/FCF": (selected or 12) + 2, "P/E": None, "Notes": "Requires evidence"},
+            {"Reference": "User Case", "EV/Revenue": None, "EV/EBITDA": selected, "EV/EBIT": selected, "EV/OCF": selected, "EV/FCF": selected, "P/E": None, "Notes": f"Selected terminal method: {dcf_output.get('terminal_value_method')}"},
+            {"Reference": "Peer Median", "EV/Revenue": peer_medians.get("EV/Revenue"), "EV/EBITDA": peer_medians.get("EV/EBITDA"), "EV/EBIT": peer_medians.get("EV/EBIT"), "EV/OCF": peer_medians.get("EV/OCF"), "EV/FCF": peer_medians.get("EV/FCF"), "P/E": peer_medians.get("P/E"), "Notes": "From selected peers"},
+            {"Reference": "Sector Median", "EV/Revenue": sector.get("EV/Revenue"), "EV/EBITDA": sector.get("EV/EBITDA"), "EV/EBIT": sector.get("EV/EBIT"), "EV/OCF": sector.get("EV/OCF"), "EV/FCF": sector.get("EV/FCF"), "P/E": sector.get("P/E"), "Notes": "Broader context"},
+            {"Reference": "Market-Implied", "EV/Revenue": None, "EV/EBITDA": reverse.get("implied_terminal_multiple"), "EV/EBIT": reverse.get("implied_terminal_multiple"), "EV/OCF": reverse.get("implied_terminal_multiple"), "EV/FCF": reverse.get("implied_terminal_multiple"), "P/E": None, "Notes": "Reverse DCF / current price"},
+        ]
+    )
+
+
 def _default_model_sanity_warnings(ctx: dict, assumptions: dict, reverse: dict, dcf_output: dict, ev_bridge: pd.DataFrame | None = None) -> list[str]:
     dataset = ctx.get("dataset", {})
     profile_text = " ".join(str(dataset.get(key, "")) for key in ["sector", "industry", "company_description"]).lower()
@@ -3562,8 +3675,33 @@ def _append_unique_assumption_changes(ticker: str, changes: list[dict]) -> None:
 
 def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFrame | None) -> None:
     warnings = validate_assumption_ranges(assumptions, historicals)
+    gross_margin = _assumption_float(assumptions.get("gross_margin"), 0.45)
+    opex_pct = _assumption_float(assumptions.get("opex_pct_revenue"), _derive_opex_pct(assumptions))
+    tax_rate = _assumption_float(assumptions.get("tax_rate"), 0.21)
+    operating_margin = gross_margin - opex_pct
+    derived_nopat_margin = operating_margin * (1 - tax_rate)
+    nopat_margin = _assumption_float(assumptions.get("nopat_margin"), derived_nopat_margin)
+    ocf_margin = _assumption_float(assumptions.get("ocf_margin"), 0.0)
+    da_pct = _assumption_float(assumptions.get("depreciation_amortization_pct_revenue"), 0.0)
+    maintenance_capex = _assumption_float(assumptions.get("maintenance_capex_pct_revenue"), 0.0)
+    share_growth = _assumption_float(assumptions.get("diluted_share_growth"), 0.0)
+    direct_nopat_override = bool(assumptions.get("use_direct_nopat_override"))
+    if opex_pct > 0.80:
+        warnings.append({"Assumption": "OPEX % Revenue", "Current Value": format_assumption_value(opex_pct, "percent"), "Severity": "High", "Reason": "OPEX consumes most of revenue. Check whether this cost structure is intended.", "Suggested Review": "Review gross margin, scaling assumptions, and one-time expenses."})
+    if operating_margin < 0 and nopat_margin > 0 and not direct_nopat_override:
+        warnings.append({"Assumption": "NOPAT Margin", "Current Value": format_assumption_value(nopat_margin, "percent"), "Severity": "High", "Reason": "NOPAT is positive while OPEX-derived EBIT is negative.", "Suggested Review": "Use direct NOPAT override only with explicit support, or adjust OPEX/gross margin."})
+    if operating_margin < -0.10 and ocf_margin > 0.05:
+        warnings.append({"Assumption": "OCF Margin", "Current Value": format_assumption_value(ocf_margin, "percent"), "Severity": "Medium", "Reason": "OCF is positive while EBIT margin is deeply negative; cash conversion may depend on working capital, SBC, or deferred revenue.", "Suggested Review": "Review cash-flow statement drivers and revenue quality."})
+    if abs(maintenance_capex) < 1e-12 and da_pct > 0.01:
+        warnings.append({"Assumption": "Maintenance CAPEX", "Current Value": format_assumption_value(maintenance_capex, "percent"), "Severity": "Medium", "Reason": "Maintenance CAPEX is zero while D&A is positive.", "Suggested Review": "Maintenance reinvestment may be understated."})
+    if abs(da_pct) < 1e-12 and (maintenance_capex > 0.02 or _assumption_float(assumptions.get("growth_capex_pct_revenue"), 0.0) > 0.03):
+        warnings.append({"Assumption": "D&A % Revenue", "Current Value": format_assumption_value(da_pct, "percent"), "Severity": "Medium", "Reason": "D&A is zero while CAPEX intensity suggests assets are being used.", "Suggested Review": "Check whether depreciation/amortization is missing from the source data."})
     if (assumptions.get("sbc_pct_revenue") or 0) > 0.10:
         warnings.append({"Assumption": "SBC % Revenue", "Current Value": format_assumption_value(assumptions.get("sbc_pct_revenue"), "percent"), "Severity": "Medium", "Reason": "SBC above 10% should flag dilution risk.", "Suggested Review": "Check diluted share growth and SBC quality."})
+    if (assumptions.get("sbc_pct_revenue") or 0) > 0.20:
+        warnings.append({"Assumption": "SBC % Revenue", "Current Value": format_assumption_value(assumptions.get("sbc_pct_revenue"), "percent"), "Severity": "High", "Reason": "SBC above 20% of revenue is very high and may distort per-share value.", "Suggested Review": "Review dilution, buybacks, and adjusted FCF treatment."})
+    if share_growth <= -0.80:
+        warnings.append({"Assumption": "Diluted Share Growth", "Current Value": format_assumption_value(share_growth, "percent"), "Severity": "High", "Reason": "Share-count reduction near -100% is unrealistic for a normal forecast.", "Suggested Review": "Check split/buyback/share-count units."})
     if (assumptions.get("terminal_multiple") or 0) > 15:
         warnings.append({"Assumption": "Terminal Multiple", "Current Value": format_assumption_value(assumptions.get("terminal_multiple"), "multiple"), "Severity": "Medium", "Reason": "Terminal multiple above 15x requires durable growth or moat evidence.", "Suggested Review": "Review moat score, peer multiples, and terminal value weight."})
     business_profile = {
@@ -3586,48 +3724,115 @@ def _render_matrix_validation_warnings(assumptions: dict, historicals: pd.DataFr
         show_table(pd.DataFrame(warnings), "No validation warnings.")
 
 
+def _linked_model_explanation_panel() -> None:
+    rows = [
+        {
+            "Editable input": "Revenue Growth %",
+            "First calculated row": "Revenue",
+            "Then flows into": "COGS, gross profit, OPEX, EBIT, NOPAT, OCF, CAPEX, FCF, fair value / share",
+        },
+        {
+            "Editable input": "OPEX % Revenue",
+            "First calculated row": "Total OPEX",
+            "Then flows into": "EBIT, tax expense, NOPAT, FCF, fair value / share",
+        },
+        {
+            "Editable input": "OCF Margin %",
+            "First calculated row": "Operating cash flow",
+            "Then flows into": "FCF and fair value / share when the OCF-based valuation basis is selected",
+        },
+        {
+            "Editable input": "Growth CAPEX % Revenue",
+            "First calculated row": "Growth CAPEX",
+            "Then flows into": "Total CAPEX, FCF, fair value / share",
+        },
+        {
+            "Editable input": "Diluted Share Growth %",
+            "First calculated row": "Diluted shares",
+            "Then flows into": "Per-share valuation and dilution risk",
+        },
+    ]
+    with st.expander("How the linked model works", expanded=False):
+        st.caption("Input rows are editable. Dollar and margin output rows are locked by default and recalculate after Apply Changes & Recalculate.")
+        show_table(pd.DataFrame(rows), "Linked model explanation unavailable.")
+        affected = OPERATING_MODEL_DEPENDENCIES.get("opex_pct_revenue", [])
+        st.caption("Example: OPEX % Revenue affects " + ", ".join(affected) + ".")
+
+
 def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, scenario_scope: str, profile: str) -> dict:
     ticker = ctx["dataset"].get("ticker", "default")
     market = ctx["dataset"].get("market_data", {})
     preview_dcf = run_dcf(ctx["historicals"], market, working)
     preview_model_table = build_time_axis_financial_model(ctx["historicals"], preview_dcf.get("forecast_table"), working)
     st.markdown('<div class="pa-section-title">DCF Assumption Matrix</div>', unsafe_allow_html=True)
-    st.caption("Edit the forecast assumption rows directly. Percentage rows use human units: enter 8.0 for 8.0%. Actual and calculated output rows stay locked in the model output table.")
+    st.caption("Edit forecast assumptions in draft mode. Percentage rows use human units: enter 8.0 for 8.0%. The DCF model recalculates only after Apply Changes & Recalculate.")
     original_matrix, specs, locked_period_columns = _build_assumption_matrix(working, ctx.get("historicals"), preview_model_table)
     period_columns = [label for _, label in specs]
     all_period_columns = [*locked_period_columns, *period_columns]
     read_only = scenario_scope == "Market-Implied Case"
     quality_warnings = _assumption_matrix_quality_warnings(original_matrix, locked_period_columns, period_columns)
-    edited_matrix = st.data_editor(
+    matrix_result = render_editable_assumption_table(
         original_matrix,
-        width="stretch",
-        height=520,
-        hide_index=True,
-        column_config={
-            "Row Key": None,
-        },
-        disabled=["Row Key", "Assumption", "Evidence", "Confidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Evidence", "Confidence", *locked_period_columns],
         key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}",
+        scenario_scope=scenario_scope,
+        column_config={"Row Key": None},
+        disabled_columns=["Row Key", "Assumption", "Row Type", "Evidence", "Confidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Row Type", "Evidence", "Confidence", *locked_period_columns],
+        read_only=read_only,
     )
     for warning in quality_warnings:
         st.warning(warning)
-    changes = handle_assumption_table_edit(edited_matrix, original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns)
-    edited = _apply_assumption_matrix(working, edited_matrix, specs)
+    if matrix_result["reset_to_base"] and scenario_scope == "User Case":
+        st.success("User Case reset to Base Case. Apply/save from the refreshed model state.")
+        return dict(base)
+    edited = dict(working)
+    changes = []
+    if matrix_result["applied"]:
+        edited = _apply_assumption_matrix(working, matrix_result["committed"], specs)
+        changes.extend(handle_assumption_table_edit(matrix_result["committed"], original_matrix, DCF_ROW_METADATA, scenario_scope, period_columns))
+        old_fv = preview_dcf.get("fair_value_per_share")
+        new_fv = run_dcf(ctx["historicals"], market, edited).get("fair_value_per_share")
+        delta = (new_fv / old_fv - 1) if old_fv not in (None, 0) and new_fv is not None else None
+        st.success(f"Recalculated {scenario_scope} DCF. Fair value changed from {fmt_per_share(old_fv)} to {fmt_per_share(new_fv)}. Change: {fmt_percent(delta)}.")
+    elif matrix_result["discarded"]:
+        st.info("Pending assumption edits discarded. Valuation remains on the committed assumptions.")
+    elif matrix_result["save_draft"]:
+        st.session_state["pa11r_draft_save_requested"] = True
+        st.info("Draft is retained in session state. Use Save / Load Analysis to persist it.")
+
+    preview_toggle = st.toggle(
+        "Preview dependent row changes before applying",
+        value=False,
+        key=f"preview_pending_model_impact_{ticker}_{scenario_scope}",
+        disabled=read_only or matrix_result["pending_count"] == 0,
+    )
+    if preview_toggle and matrix_result["pending_count"]:
+        draft_assumptions = _apply_assumption_matrix(working, matrix_result["draft"], specs)
+        draft_dcf = run_dcf(ctx["historicals"], market, draft_assumptions)
+        impact_rows = _pending_model_impact_rows(preview_dcf, draft_dcf)
+        st.markdown("**Pending Model Impact**")
+        show_table(pd.DataFrame(impact_rows), "No pending model impact available.")
+    _linked_model_explanation_panel()
 
     val_col, explain_col = st.columns([0.48, 0.52])
     with val_col:
         st.markdown("**Terminal / Valuation Assumptions**")
         original_valuation = _build_valuation_assumption_table(edited)
-        edited_valuation = st.data_editor(
+        valuation_result = render_editable_assumption_table(
             original_valuation,
-            width="stretch",
-            hide_index=True,
-            column_config={"Row Key": None},
-            disabled=["Row Key", "Assumption", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Evidence"],
             key=f"dcf_valuation_matrix_{ticker}_{scenario_scope}",
+            scenario_scope=scenario_scope,
+            column_config={"Row Key": None},
+            height=240,
+            disabled_columns=["Row Key", "Assumption", "Row Type", "Evidence", "Value"] if read_only else ["Row Key", "Assumption", "Row Type", "Evidence"],
+            read_only=read_only,
         )
-        changes.extend(handle_assumption_table_edit(edited_valuation, original_valuation, VALUATION_ROW_METADATA, scenario_scope, ["Value"]))
-        edited = _apply_valuation_assumption_table(edited, edited_valuation)
+        if valuation_result["applied"]:
+            changes.extend(handle_assumption_table_edit(valuation_result["committed"], original_valuation, VALUATION_ROW_METADATA, scenario_scope, ["Value"]))
+            edited = _apply_valuation_assumption_table(edited, valuation_result["committed"])
+            st.success("Terminal / valuation assumptions applied.")
+        elif valuation_result["save_draft"]:
+            st.session_state["pa11r_draft_save_requested"] = True
+            st.info("Valuation draft is retained in session state. Use Save / Load Analysis to persist it.")
     _append_unique_assumption_changes(ticker, changes)
 
     with explain_col:
@@ -3657,6 +3862,38 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
     with st.expander("Calculated DCF Output (Locked)", expanded=False):
         st.caption("These rows recalculate from the editable assumption table above. They are display-only formula outputs, like the locked rows in an Excel model.")
         _show_financial_table(_dcf_forecast_output_table(edited_dcf, edited, ctx.get("historicals")), "DCF output unavailable.")
+    with st.expander("Terminal Value Method and Multiple Guide", expanded=False):
+        st.markdown(
+            """
+            **Terminal multiple** is the valuation multiple applied to the final forecast year metric.
+            For example, if the model uses 20.0x final-year FCF, terminal enterprise value = final-year FCF x 20.0.
+
+            **How to choose it:** anchor to peer median, sector median, company growth durability, OCF/FCF quality, moat strength,
+            capital intensity, cyclicality, balance sheet risk, management credibility, and market-implied reverse DCF.
+            """
+        )
+        recommendation = recommend_terminal_multiple(
+            "EV/FCF",
+            ctx.get("peer_df"),
+            sector_median_multiples(ctx.get("dataset", {}).get("sector"), ctx.get("dataset", {}).get("industry")),
+            {"revenue_cagr": edited.get("revenue_cagr")},
+            ctx.get("moat"),
+            {"ocf_margin": edited.get("ocf_margin")},
+            {"total_capex_pct_revenue": edited.get("total_capex_pct_revenue")},
+            ctx.get("management"),
+        )
+        metric_row(
+            [
+                ("Terminal Method", edited_dcf.get("terminal_value_method"), "text"),
+                ("Recommended Low", recommendation.get("recommended_low"), "multiple"),
+                ("Recommended Mid", recommendation.get("recommended_mid"), "multiple"),
+                ("Recommended High", recommendation.get("recommended_high"), "multiple"),
+            ]
+        )
+        st.caption(f"{recommendation.get('classification')}: {recommendation.get('reason')}")
+        for warning in recommendation.get("warnings", []):
+            st.warning(warning)
+        show_table(_terminal_multiple_guide(ctx, edited, edited_dcf), "Terminal multiple guide unavailable.")
     _render_matrix_validation_warnings(edited, ctx.get("historicals"))
     if st.session_state.get("assumption_update_log"):
         st.markdown('<div class="pa-section-title">Assumption Change Log</div>', unsafe_allow_html=True)
@@ -3923,6 +4160,7 @@ def _assumption_editor(ctx: dict) -> dict:
         basis = basis or basis_default
         st.caption(VALUATION_BASIS_OPTIONS[basis]["description"])
         working["dcf_mode"] = VALUATION_BASIS_OPTIONS[basis]["mode"]
+        st.session_state["dcf_valuation_basis"] = basis
 
         direct_nopat_override = st.toggle(
             "Use direct NOPAT margin override instead of OPEX-derived EBIT bridge",
@@ -3937,6 +4175,21 @@ def _assumption_editor(ctx: dict) -> dict:
             help="When enabled, maintenance CAPEX follows D&A % revenue. Use this only when maintenance/growth CAPEX is not disclosed.",
         )
         working["use_da_as_maintenance_capex_proxy"] = use_da_proxy
+        terminal_method = st.segmented_control(
+            "Terminal Value Method",
+            ["Gordon Growth", "Exit Multiple", "Blended"],
+            default=str(working.get("terminal_value_method") or "Blended") if str(working.get("terminal_value_method") or "Blended") in {"Gordon Growth", "Exit Multiple", "Blended"} else "Blended",
+            help="Gordon Growth capitalizes final FCF into perpetuity. Exit Multiple applies the terminal multiple to final forecast FCF. Blended averages both.",
+        )
+        working["terminal_value_method"] = terminal_method or "Blended"
+        advanced_overrides = st.toggle(
+            "Enable advanced overrides",
+            value=bool(st.session_state.get("advanced_overrides_enabled", False)),
+            help="Default is off. Keep calculated dollar rows locked unless you explicitly want override behavior.",
+        )
+        st.session_state["advanced_overrides_enabled"] = advanced_overrides
+        if advanced_overrides:
+            st.info("Advanced override mode is enabled for review, but calculated dollar rows remain protected in this cockpit table until override rows are explicitly added.")
 
     edited = _render_assumption_matrix_workbench(ctx, base, working, scenario_scope, profile)
     if scenario_scope == "User Case":
@@ -4167,6 +4420,18 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
     alignment = analyze_compensation_alignment(dataset.get("filing_texts", {}), historicals)
     moat = analyze_moat(dataset, historicals, dataset.get("filing_texts", {}), peer_df, clauses)
     risks = analyze_risks_and_thesis_breakers(dataset.get("filing_texts", {}), clauses, historicals)
+    pa11_story = build_pa11_story(
+        dataset,
+        filing_texts=dataset.get("filing_texts", {}),
+        clauses=clauses,
+        news_items=dataset.get("news_items") or dataset.get("news"),
+        events=dataset.get("events"),
+        peer_data=peer_df,
+        social_buzz=dataset.get("social_buzz"),
+        ma_analysis=ma,
+        management_analysis=management,
+        moat_analysis=moat,
+    )
     scoring = score_investment(
         {
             "dcf": base_dcf,
@@ -4190,6 +4455,7 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
         "reverse": reverse,
         "peer_df": peer_df,
         "company_story": company_story,
+        "pa11_story": pa11_story,
         "capex_quality": capex_quality,
         "leverage": leverage,
         "ma": ma,
@@ -4215,6 +4481,20 @@ def _current_user_assumptions(ctx: dict) -> dict:
 def _current_sotp_segments(ctx: dict):
     ticker = ctx.get("dataset", {}).get("ticker", "default")
     return st.session_state.get(f"sotp_{ticker}_segments", build_default_segment_data(ctx.get("historicals"), ctx.get("dataset", {}), ctx.get("base_assumptions", {})))
+
+
+def _restore_assumption_bucket(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    restored = {}
+    for key, item in value.items():
+        if isinstance(item, pd.DataFrame):
+            restored[key] = item
+        elif isinstance(item, list):
+            restored[key] = pd.DataFrame(item)
+        else:
+            restored[key] = item
+    return restored
 
 
 def _source_metadata_for_save(dataset: dict) -> dict:
@@ -4267,6 +4547,7 @@ def collect_dashboard_state(ctx: dict) -> dict:
     regime, _regime_subtitle, _regime_status = _market_regime(ctx)
     scoring = ctx.get("scoring", {})
     notes = st.session_state.get("pa11r_user_notes", {})
+    linked_assumptions = _current_user_assumptions(ctx)
     return {
         "analysis_id": st.session_state.get("loaded_analysis_id"),
         "created_at": st.session_state.get("loaded_analysis_created_at"),
@@ -4321,6 +4602,19 @@ def collect_dashboard_state(ctx: dict) -> dict:
             "compensation_sbc": ctx.get("alignment", {}),
             "user_notes": notes.get("management", ""),
         },
+        "pa11_story": {**(ctx.get("pa11_story", {}) or {}), "user_notes": st.session_state.get("pa11_story_user_notes", "")},
+        "linked_operating_model": {
+            "assumptions_committed": st.session_state.get("assumptions_committed", {}),
+            "assumptions_draft": st.session_state.get("assumptions_draft", {}),
+            "assumptions_pending_changes": st.session_state.get("assumptions_pending_changes", {}),
+            "last_applied_assumptions": st.session_state.get("last_applied_assumptions", {}),
+            "assumption_change_log": st.session_state.get("assumption_update_log", []),
+            "row_types": {"assumption_rows": "Input", "dcf_output_rows": "Locked Output"},
+            "override_settings": {"advanced_overrides": st.session_state.get("advanced_overrides_enabled", False)},
+            "valuation_basis": st.session_state.get("dcf_valuation_basis", "OCF-based FCF"),
+            "terminal_value_method": linked_assumptions.get("terminal_value_method", "Blended"),
+            "terminal_multiple_settings": {"terminal_multiple": linked_assumptions.get("terminal_multiple")},
+        },
         "user_notes": {
             "general": notes.get("general", ""),
             "valuation": notes.get("valuation", ""),
@@ -4357,6 +4651,20 @@ def restore_analysis_to_session_state(payload: dict, use_saved_market_snapshot: 
     if multiples.get("selected_multiple"):
         st.session_state["pa11r_multiples_selected_multiple"] = multiples.get("selected_multiple")
     st.session_state["pa11r_user_notes"] = payload.get("user_notes", {})
+    story = payload.get("pa11_story", {}) or {}
+    st.session_state["pa11_story_user_notes"] = story.get("user_notes", "")
+    linked = payload.get("linked_operating_model", {}) or {}
+    for bucket_name in ["assumptions_committed", "assumptions_draft", "assumptions_pending_changes", "last_applied_assumptions"]:
+        if bucket_name in linked:
+            st.session_state[bucket_name] = _restore_assumption_bucket(linked.get(bucket_name))
+    if linked.get("assumption_change_log"):
+        st.session_state["assumption_update_log"] = linked.get("assumption_change_log", [])
+        st.session_state["pa11r_assumption_change_log"] = list(st.session_state["assumption_update_log"])
+    override_settings = linked.get("override_settings", {}) or {}
+    if "advanced_overrides" in override_settings:
+        st.session_state["advanced_overrides_enabled"] = bool(override_settings.get("advanced_overrides"))
+    if linked.get("valuation_basis"):
+        st.session_state["dcf_valuation_basis"] = linked.get("valuation_basis")
 
 
 DRIVER_KEY_ROWS = [
@@ -5940,6 +6248,7 @@ def _pa11r_snapshot(ctx: dict) -> None:
         ]
     )
     render_status_grid(_analysis_state_cards(ctx))
+    _pa11_story_snapshot(ctx)
     render_section(
         "Valuation Method Reconciliation",
         "DCF, SOTP, and multiples are separate lenses. The snapshot only accepts the valuation read when they can be reconciled.",
@@ -5967,6 +6276,97 @@ def _pa11r_snapshot(ctx: dict) -> None:
     with st.expander("One-page tear sheet", expanded=False):
         render_tearsheet(_tearsheet_summary(ctx, scenario_state))
         render_copy_summary(_tearsheet_summary(ctx, scenario_state))
+
+
+def _pa11_story_snapshot(ctx: dict) -> None:
+    story = ctx.get("pa11_story") or {}
+    render_section(
+        "PA-11 Story & Assumption Map",
+        "Read the business story first, then decide which User Case assumptions deserve review.",
+        "Story",
+    )
+    c1, c2 = st.columns([0.58, 0.42])
+    with c1:
+        st.markdown("**Company Story**")
+        st.write(_clip_text(story.get("what_they_do") or story.get("company_one_liner") or "Unavailable", 420))
+        st.markdown("**How It Makes Money**")
+        st.write(_clip_text(story.get("how_they_make_money") or "Unavailable", 320))
+        st.markdown("**Key Growth Drivers**")
+        growth_rows = story.get("growth_drivers") or []
+        if growth_rows:
+            _mini_list("Growth drivers", [row.get("Driver") for row in growth_rows])
+        else:
+            st.write("Unavailable")
+    with c2:
+        st.markdown("**Assumptions to Review**")
+        assumption_map = story.get("assumption_map") or []
+        if assumption_map:
+            _mini_list("Model assumptions", [f"{row.get('assumption')}: {row.get('suggested_action')}" for row in assumption_map])
+        else:
+            st.write("Unavailable")
+        st.markdown("**Latest Updates / Events**")
+        st.write(_clip_text(story.get("latest_updates") or "Dashboard has not fetched recent news/social data yet.", 260))
+
+    with st.expander("Open full PA-11 Story", expanded=False):
+        story_sections = pd.DataFrame(
+            [
+                {"Section": "What they sell", "Read": story.get("product_story")},
+                {"Section": "Industry position", "Read": story.get("industry_positioning")},
+                {"Section": "M&A effect on growth", "Read": story.get("ma_effect_on_growth")},
+                {"Section": "New drivers / changes", "Read": story.get("new_drivers_or_changes")},
+                {"Section": "Peer context", "Read": story.get("peer_context")},
+                {"Section": "Social/news buzz", "Read": story.get("social_buzz_context")},
+                {"Section": "Moat / risk context", "Read": story.get("moat_and_risk_context")},
+                {"Section": "Management context", "Read": story.get("management_context")},
+            ]
+        )
+        show_table(story_sections, "Story sections unavailable.")
+        st.markdown("**Growth Driver Map**")
+        show_table(pd.DataFrame(story.get("growth_drivers") or []), "No growth-driver map available.")
+        st.markdown("**What This Means For Assumptions**")
+        show_table(pd.DataFrame(story.get("assumption_map") or []), "No assumption map available.")
+        st.markdown("**Relevant Clauses For This Story**")
+        clause_rows = pd.DataFrame(story.get("relevant_clauses") or [])
+        if not clause_rows.empty:
+            clause_rows["Apply to User Case"] = False
+            edited_clauses = st.data_editor(
+                clause_rows,
+                width="stretch",
+                hide_index=True,
+                key=f"pa11_story_clause_actions_{ctx.get('dataset', {}).get('ticker', 'default')}",
+            )
+            if st.button("Apply selected story clauses to User Case review log", key=f"apply_pa11_story_clauses_{ctx.get('dataset', {}).get('ticker', 'default')}"):
+                selected = edited_clauses[edited_clauses["Apply to User Case"].astype(bool)]
+                log = st.session_state.setdefault("assumption_update_log", [])
+                for _, row in selected.iterrows():
+                    log.append(
+                        {
+                            "timestamp": pd.Timestamp.utcnow().isoformat(),
+                            "case": "User Case",
+                            "model_line": row.get("Affected assumption"),
+                            "old_value": None,
+                            "new_value": None,
+                            "evidence_source": row.get("Source"),
+                            "evidence_summary": row.get("Story implication") or row.get("Clause/Event"),
+                            "user_note": "Story-linked clause added for manual review; no numeric assumption changed automatically.",
+                            "confidence": row.get("Confidence"),
+                            "fair_value_impact": "Review required",
+                            "status": "manual_review",
+                        }
+                    )
+                st.session_state["pa11r_assumption_change_log"] = list(log)
+                st.success(f"Added {len(selected)} story-linked item(s) to the User Case review log.")
+        else:
+            st.info("No relevant story clauses available. Load SEC evidence for clause-level mapping.")
+        show_table(pd.DataFrame({"Manual review": story.get("manual_review_items") or []}), "No manual review items.")
+        show_table(pd.DataFrame({"Sources used": story.get("sources_used") or []}), "No story sources available.")
+        st.text_area(
+            "My thesis notes",
+            value=st.session_state.get("pa11_story_user_notes", story.get("user_notes", "")),
+            key="pa11_story_user_notes",
+            height=120,
+            help="Saved with the PA-11 Story when you save the analysis.",
+        )
 
 
 def _company_story_context(ctx: dict) -> None:

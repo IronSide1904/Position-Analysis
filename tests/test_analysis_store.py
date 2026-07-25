@@ -38,6 +38,13 @@ def _state():
         "sotp": {"manual_segments": [{"Segment": "Core", "Revenue": 1000.0}], "scenario_outputs": {"Base Case": {"fair_value_per_share": 17.0}}},
         "multiples": {"selected_multiple_basis": "Normalized Year", "peer_medians": {"EV/OCF": 15.0}},
         "evidence": {"manual_review_items": [{"Data Needed": "Debt detail"}]},
+        "pa11_story": {"what_they_do": "ABC sells workflow software.", "user_notes": "Story note"},
+        "linked_operating_model": {
+            "assumptions_committed": {"editor": [{"Assumption": "Revenue Growth %", "FY2026E": "8.0%"}]},
+            "assumptions_draft": {"editor": [{"Assumption": "Revenue Growth %", "FY2026E": "10.0%"}]},
+            "terminal_value_method": "Exit Multiple",
+            "terminal_multiple_settings": {"terminal_multiple": 18.0},
+        },
         "user_notes": {"general": "Initial review"},
         "FINVIZ_AUTH_TOKEN": "do-not-save",
     }
@@ -59,6 +66,8 @@ def test_save_load_index_and_secret_scrub(monkeypatch):
     saved = load_analysis(result["analysis_id"])
     assert saved["ticker"] == "ABC"
     assert saved["dcf"]["scenario_assumptions"]["User Case"]["revenue_cagr"] == 0.08
+    assert saved["pa11_story"]["what_they_do"] == "ABC sells workflow software."
+    assert saved["linked_operating_model"]["terminal_value_method"] == "Exit Multiple"
     assert "FINVIZ_AUTH_TOKEN" not in json.dumps(saved)
     index = list_saved_analyses("ABC")
     assert index[0]["analysis_id"] == result["analysis_id"]

@@ -191,6 +191,8 @@ def build_analysis_payload(
         "evidence": dashboard_state.get("evidence", {}),
         "business_quality": dashboard_state.get("business_quality", {}),
         "management_capital_allocation": dashboard_state.get("management_capital_allocation", {}),
+        "pa11_story": dashboard_state.get("pa11_story", {}),
+        "linked_operating_model": dashboard_state.get("linked_operating_model", {}),
         "user_notes": dashboard_state.get("user_notes", {}),
     }
     return scrub_secrets(migrate_analysis_payload(payload))

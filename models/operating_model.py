@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+
+OPERATING_MODEL_DEPENDENCIES = {
+    "revenue_growth_pct": ["revenue"],
+    "revenue": [
+        "cogs",
+        "gross_profit",
+        "opex",
+        "ebit",
+        "tax_expense",
+        "nopat",
+        "ocf",
+        "da",
+        "maintenance_capex",
+        "growth_capex",
+        "total_capex",
+        "working_capital_change",
+        "fcf",
+        "fair_value_per_share",
+    ],
+    "cogs_pct_revenue": ["cogs", "gross_profit", "gross_margin_pct", "ebit", "nopat", "fcf"],
+    "gross_margin_pct": ["gross_profit", "cogs", "ebit", "nopat", "fcf"],
+    "opex_pct_revenue": ["opex", "ebit", "ebit_margin_pct", "tax_expense", "nopat", "nopat_margin_pct", "fcf", "fair_value_per_share"],
+    "tax_rate": ["tax_expense", "nopat", "nopat_margin_pct", "fcf", "fair_value_per_share"],
+    "nopat_margin_override_pct": ["nopat", "nopat_margin_pct", "fcf", "fair_value_per_share"],
+    "ocf_margin_pct": ["ocf", "ocf_margin_pct", "fcf", "fair_value_per_share"],
+    "da_pct_revenue": ["da", "maintenance_capex", "ebit_bridge", "fcf"],
+    "maintenance_capex_pct_revenue": ["maintenance_capex", "total_capex", "fcf", "fair_value_per_share"],
+    "growth_capex_pct_revenue": ["growth_capex", "total_capex", "fcf", "fair_value_per_share"],
+    "working_capital_pct_revenue": ["working_capital_change", "fcf", "fair_value_per_share"],
+    "sbc_pct_revenue": ["sbc", "adjusted_fcf", "diluted_shares", "fair_value_per_share"],
+    "diluted_share_growth_pct": ["diluted_shares", "fair_value_per_share"],
+}
+
+
+FORECAST_CALCULATION_ORDER = [
+    "Revenue",
+    "COGS / Gross Profit",
+    "OPEX",
+    "EBIT",
+    "Tax Expense",
+    "NOPAT",
+    "D&A",
+    "OCF",
+    "Maintenance CAPEX",
+    "Growth CAPEX",
+    "Total CAPEX",
+    "Working Capital Change",
+    "FCF",
+    "SBC / Dilution",
+    "Net Debt",
+    "Equity Value",
+    "Fair Value Per Share",
+]
