@@ -6,7 +6,7 @@ import math
 import pandas as pd
 
 from models.dcf_model import run_dcf
-from models.driver_templates import AI_INFRA_DRIVER_ROWS, get_driver_template
+from models.driver_templates import AI_INFRA_DRIVER_ROWS, PROFILE_ALIASES, get_driver_template
 
 
 MODEL_TYPES = [
@@ -18,12 +18,14 @@ MODEL_TYPES = [
     "Semiconductor",
     "Marketplace / Platform",
     "Marketplace / Transaction",
+    "Consumer Brand / Retail",
     "Consumer Brand",
     "Financial / Fintech",
     "Industrial / Hardware",
     "Energy / Commodity",
     "Biotech / Pharma",
     "Real Estate / REIT",
+    "Advertising / Media / Ad-Tech",
     "Manufacturing / Unit Volume",
     "Retail / Store",
     "Segment-Based",
@@ -96,6 +98,7 @@ class ValuationMethodResult:
 @dataclass
 class IntegratedValuationResult:
     selected_scenario: str
+    profile: str
     driver_model: DriverModelResult
     dcf_result: dict
     method_results: list[ValuationMethodResult]
@@ -158,6 +161,7 @@ def infer_business_model_profile(dataset: dict | None) -> BusinessModelProfile:
 
 
 def build_business_model_profile(model_type: str = "Standard Financial") -> BusinessModelProfile:
+    model_type = PROFILE_ALIASES.get(model_type, model_type)
     model_type = model_type if model_type in MODEL_TYPES else "Standard Financial"
     if model_type == "General":
         model_type = "Standard Financial"
@@ -169,12 +173,14 @@ def build_business_model_profile(model_type: str = "Standard Financial") -> Busi
         "Marketplace / Transaction": ("Transaction volume", "Take rate revenue per unit"),
         "Marketplace / Platform": ("Transaction volume", "Take rate revenue per unit"),
         "Semiconductor": ("Units shipped", "ASP"),
+        "Consumer Brand / Retail": ("Units sold / stores", "ASP / revenue per store"),
         "Consumer Brand": ("Units sold / stores", "ASP / revenue per store"),
         "Financial / Fintech": ("Assets / accounts", "Yield / fee revenue per unit"),
         "Industrial / Hardware": ("Production units", "Revenue per unit"),
         "Energy / Commodity": ("Production volume", "Realized price"),
         "Biotech / Pharma": ("Probability-weighted pipeline units", "Revenue per unit"),
         "Real Estate / REIT": ("Properties / sq ft", "Rent per unit"),
+        "Advertising / Media / Ad-Tech": ("Impressions / traffic", "CPM / take-rate revenue"),
         "Manufacturing / Unit Volume": ("Production units", "Revenue per unit"),
         "Retail / Store": ("Stores", "Revenue per store"),
         "Segment-Based": ("Segment units", "Revenue per segment unit"),
@@ -182,7 +188,8 @@ def build_business_model_profile(model_type: str = "Standard Financial") -> Busi
         "Standard Financial": (None, None),
     }
     capacity_unit, revenue_driver = capacity_names[model_type]
-    driver_rows = AI_INFRA_DRIVER_ROWS if model_type == "AI Infrastructure / Data Center" else [
+    template = get_driver_template(model_type)
+    legacy_driver_rows = [
         "capacity_added",
         "utilization",
         "revenue_per_unit",
@@ -206,16 +213,22 @@ def build_business_model_profile(model_type: str = "Standard Financial") -> Busi
         "exit_ebitda_multiple",
         "exit_ebit_multiple",
     ]
+    if model_type == "AI Infrastructure / Data Center":
+        driver_rows = AI_INFRA_DRIVER_ROWS
+    elif template.get("profile") == model_type or model_type == "Standard Financial":
+        driver_rows = template.get("default_driver_rows") or legacy_driver_rows
+    else:
+        driver_rows = legacy_driver_rows
     return BusinessModelProfile(
         model_type=model_type,
         capacity_unit_name=capacity_unit,
         revenue_driver_name=revenue_driver,
         uses_capacity_model=model_type != "Standard Financial",
-        uses_unit_economics=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Custom", "Semiconductor", "Industrial / Hardware", "Energy / Commodity", "Real Estate / REIT"},
-        uses_customer_model=model_type in {"Subscription / SaaS", "SaaS / Software", "Marketplace / Transaction", "Marketplace / Platform", "Financial / Fintech"},
+        uses_unit_economics=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Custom", "Semiconductor", "Industrial / Hardware", "Energy / Commodity", "Real Estate / REIT", "Consumer Brand / Retail", "Advertising / Media / Ad-Tech"},
+        uses_customer_model=model_type in {"Subscription / SaaS", "SaaS / Software", "Marketplace / Transaction", "Marketplace / Platform", "Financial / Fintech", "Advertising / Media / Ad-Tech"},
         uses_segment_model=model_type == "Segment-Based",
-        capital_intensive=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Semiconductor", "Industrial / Hardware", "Energy / Commodity", "Real Estate / REIT"},
-        debt_funded=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Energy / Commodity", "Retail / Store", "Real Estate / REIT"},
+        capital_intensive=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Semiconductor", "Industrial / Hardware", "Energy / Commodity", "Real Estate / REIT", "Consumer Brand / Retail"},
+        debt_funded=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Energy / Commodity", "Retail / Store", "Real Estate / REIT", "Consumer Brand / Retail"},
         maintenance_cost_treatment="Capitalized" if model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume"} else "Expensed",
         depreciation_method="Vintage-based",
         driver_definitions=DRIVER_DEFINITIONS,
@@ -277,7 +290,8 @@ def default_driver_matrix(profile: BusinessModelProfile, historicals: pd.DataFra
     latest_capacity = 1.0
     revenue_per_unit = latest_revenue / latest_capacity if latest_capacity else latest_revenue
     price = _num(market.get("price"), 1.0) or 1.0
-    template_defaults = get_driver_template(profile.model_type).get("default_driver_assumptions", {})
+    template = get_driver_template(profile.model_type)
+    template_defaults = template.get("default_driver_assumptions", {})
     defaults = {
         "capacity_added": 0.10 if profile.uses_capacity_model else 0.0,
         "utilization": 0.75,
@@ -319,21 +333,31 @@ def default_driver_matrix(profile: BusinessModelProfile, historicals: pd.DataFra
         "tax_rate": _num(assumptions.get("tax_rate"), 0.21),
         "earnings_multiple": 25.0,
     }
-    defaults.update({key: value for key, value in template_defaults.items() if key not in {"equity_issue_price", "beta"}})
+    converted_template_defaults = {}
+    for key, value in template_defaults.items():
+        if key in {"equity_issue_price", "beta"}:
+            continue
+        if key in {"maintenance_cost_per_unit", "hardware_cost_per_unit", "infrastructure_cost_per_unit", "land_cost_per_unit"} and _num(value, 0.0) < 1:
+            converted_template_defaults[key] = latest_revenue * _num(value)
+        else:
+            converted_template_defaults[key] = value
+    defaults.update(converted_template_defaults)
+    overrides = template.get("driver_overrides", {})
     rows = []
     for key in profile.default_driver_rows:
         definition = DRIVER_DEFINITIONS[key]
+        override = overrides.get(key, {})
         row = {
             "row_key": key,
-            "Category": definition["category"],
-            "Driver": definition["label"],
+            "Category": override.get("category", definition["category"]),
+            "Driver": override.get("label", definition["label"]),
             "Unit": definition["unit"],
-            "Method": definition["source"],
+            "Method": override.get("source", definition["source"]),
             "Evidence Grade": "Estimated",
-            "Confidence": definition["confidence"],
+            "Confidence": override.get("confidence", definition["confidence"]),
             "Warning": definition["warning"],
-            "Model Impact": definition.get("impact") or definition["warning"],
-            "Reasonable Range": definition.get("range") or "Review history, peers, filings, and management guidance.",
+            "Model Impact": override.get("impact") or definition.get("impact") or definition["warning"],
+            "Reasonable Range": override.get("range") or definition.get("range") or "Review history, peers, filings, and management guidance.",
             "User Note": "",
             "Historical / LTM": defaults[key],
         }
@@ -412,6 +436,9 @@ def _run_ai_infrastructure_driver_model(
     utilization_ltm = _matrix_value(driver_matrix, "utilization", "Historical / LTM", 0.70)
     revenue_per_gw_ltm = latest_revenue / max((bw_prior + rubin_prior + other_prior) * utilization_ltm, 1.0)
     latest_ebitda = _latest_any(historicals, ["Adjusted EBITDA", "EBITDA"], latest_revenue * _num(assumptions.get("ocf_margin"), 0.20))
+    latest_gross_margin = min(max(_num(assumptions.get("gross_margin"), _num(assumptions.get("nopat_margin"), 0.12) + 0.25), 0.0), 0.95)
+    latest_gross_profit = latest_revenue * latest_gross_margin
+    latest_opex = max(latest_gross_profit - latest_ebitda, 0.0)
     latest_depreciation = _latest_any(historicals, ["D&A", "Depreciation", "Depreciation & Amortization"], latest_revenue * _num(assumptions.get("depreciation_amortization_pct_revenue"), 0.03))
     latest_ebit = _latest_any(historicals, ["EBIT", "Operating Income"], latest_ebitda - latest_depreciation)
     latest_interest = beginning_debt * _num(assumptions.get("pretax_cost_of_debt"), 0.06)
@@ -442,6 +469,10 @@ def _run_ai_infrastructure_driver_model(
         "Revenue per Rubin GW": _matrix_value(driver_matrix, "revenue_per_rubin_gw", "Historical / LTM", revenue_per_gw_ltm),
         "Revenue": latest_revenue,
         "Revenue Growth": _num(assumptions.get("revenue_cagr"), 0.0),
+        "Gross Profit": latest_gross_profit,
+        "Gross Margin": latest_gross_margin,
+        "OPEX": latest_opex,
+        "OPEX % Revenue": latest_opex / latest_revenue if latest_revenue else None,
         "Adjusted EBITDA": latest_ebitda,
         "EBITDA Margin": latest_ebitda / latest_revenue if latest_revenue else None,
         "Hardware Depreciation": latest_depreciation,
@@ -499,6 +530,9 @@ def _run_ai_infrastructure_driver_model(
         revenue = (avg_bw * rev_bw + avg_rubin * rev_rubin + avg_other * rev_other) * utilization
         ebitda_margin = _num(values.get("adjusted_ebitda_margin"), _num(assumptions.get("ocf_margin"), 0.25))
         ebitda = revenue * ebitda_margin
+        gross_margin = min(max(ebitda_margin + 0.25, 0.0), 0.95)
+        gross_profit = revenue * gross_margin
+        opex = max(gross_profit - ebitda, 0.0)
         hw_bw = _num(values.get("hardware_cost_per_blackwell_gw"))
         hw_rubin = _num(values.get("hardware_cost_per_rubin_gw"))
         hw_other = _num(values.get("hardware_cost_per_other_gw"))
@@ -578,6 +612,10 @@ def _run_ai_infrastructure_driver_model(
             "Total Build Cost per Rubin GW": hw_rubin + infra_rubin,
             "Revenue": revenue,
             "Revenue Growth": revenue / prior_revenue - 1 if prior_revenue else None,
+            "Gross Profit": gross_profit,
+            "Gross Margin": gross_margin,
+            "OPEX": opex,
+            "OPEX % Revenue": opex / revenue if revenue else None,
             "Adjusted EBITDA": ebitda,
             "EBITDA Margin": ebitda_margin,
             "Maintenance Operating Expense": 0.0,
@@ -639,7 +677,7 @@ def _run_ai_infrastructure_driver_model(
     return DriverModelResult(
         driver_forecast=table[["Period", "Blackwell GW Deployed", "Rubin GW Deployed", "Other GW Deployed", "Total Energized GW", "Average Blackwell GW", "Average Rubin GW", "Average Other GW", "Average Total GW", "Beginning Capacity", "Ending Capacity", "Average Capacity", "Utilization", "Revenue per Unit", "Revenue per Blackwell GW", "Revenue per Rubin GW", "Revenue per Other GW", "Hardware Cost per Blackwell GW", "Hardware Cost per Rubin GW", "Hardware Cost per Other GW", "Land / Power / Cooling Cost per Blackwell GW", "Land / Power / Cooling Cost per Rubin GW", "Land / Power / Cooling Cost per Other GW", "Total Build Cost per Blackwell GW", "Total Build Cost per Rubin GW"]].to_dict("list"),
         revenue_forecast=table[["Period", "Revenue", "Revenue Growth"]].to_dict("list"),
-        income_statement=table[["Period", "Revenue", "Adjusted EBITDA", "EBITDA Margin", "Maintenance Operating Expense", "Hardware Depreciation", "Infrastructure Depreciation", "Depreciation", "EBIT", "EBIT Margin", "Interest Expense", "Pretax Income", "Tax Expense", "Net Income", "NOPAT"]].to_dict("list"),
+        income_statement=table[["Period", "Revenue", "Revenue Growth", "Gross Profit", "Gross Margin", "OPEX", "OPEX % Revenue", "Adjusted EBITDA", "EBITDA Margin", "Maintenance Operating Expense", "Hardware Depreciation", "Infrastructure Depreciation", "Depreciation", "EBIT", "EBIT Margin", "Interest Expense", "Pretax Income", "Tax Expense", "Net Income", "NOPAT"]].to_dict("list"),
         cash_flow=table[["Period", "Adjusted EBITDA", "Maintenance Operating Expense", "Interest Expense", "Tax Expense", "Operating Cash Flow", "Operating Cash Flow Margin", "Build CAPEX", "Growth CAPEX", "Capitalized Maintenance CAPEX", "Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing"]].to_dict("list"),
         funding_schedule=table[["Period", "Build CAPEX", "Growth CAPEX", "Capitalized Maintenance CAPEX", "Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing", "Customer Prepayments", "Government Grants / Subsidies", "Equity Raised", "Debt Drawn", "Debt Repaid", "Ending Cash", "Ending Debt", "Ending Net Debt"]].to_dict("list"),
         debt_schedule=table[["Period", "Beginning Debt", "Debt Drawn", "Debt Repaid", "Ending Debt", "Average Debt", "Interest Expense"]].to_dict("list"),
@@ -681,6 +719,9 @@ def run_driver_model(
         ["Adjusted EBITDA", "EBITDA", "Operating Income Before Depreciation"],
         latest_revenue * _num(assumptions.get("ocf_margin"), 0.18),
     )
+    latest_gross_margin = min(max(_num(assumptions.get("gross_margin"), _num(assumptions.get("nopat_margin"), 0.12) + 0.25), 0.0), 0.95)
+    latest_gross_profit = latest_revenue * latest_gross_margin
+    latest_opex = max(latest_gross_profit - latest_ebitda, 0.0)
     latest_depreciation = _latest_any(
         historicals,
         ["D&A", "Depreciation", "Depreciation & Amortization", "Depreciation and Amortization"],
@@ -714,6 +755,10 @@ def run_driver_model(
         "Revenue per Unit": _matrix_value(driver_matrix, "revenue_per_unit", "Historical / LTM", latest_revenue),
         "Revenue": latest_revenue,
         "Revenue Growth": _num(assumptions.get("revenue_cagr"), 0.0),
+        "Gross Profit": latest_gross_profit,
+        "Gross Margin": latest_gross_margin,
+        "OPEX": latest_opex,
+        "OPEX % Revenue": latest_opex / latest_revenue if latest_revenue else None,
         "Adjusted EBITDA": latest_ebitda,
         "EBITDA Margin": latest_ebitda / latest_revenue if latest_revenue else None,
         "Maintenance Operating Expense": latest_revenue * _num(assumptions.get("maintenance_expense_pct_revenue"), 0.0),
@@ -774,6 +819,9 @@ def run_driver_model(
         revenue = avg_capacity * utilization * revenue_per_unit if profile.uses_capacity_model else (prior_revenue * (1 + _num(assumptions.get("revenue_cagr"), 0.08)) if prior_revenue else revenue_per_unit)
         ebitda_margin = _num(values.get("ebitda_margin"), _num(assumptions.get("ocf_margin"), 0.18))
         ebitda = revenue * ebitda_margin
+        gross_margin = min(max(ebitda_margin + 0.25, 0.0), 0.95)
+        gross_profit = revenue * gross_margin
+        opex = max(gross_profit - ebitda, 0.0)
         maintenance_amount = avg_capacity * _num(values.get("maintenance_cost_per_unit"))
         if treatment == "Expensed":
             maintenance_expense = maintenance_amount
@@ -825,7 +873,8 @@ def run_driver_model(
         tax_expense = max(pretax_income, 0.0) * tax_rate
         net_income = pretax_income - tax_expense
         operating_cash_flow = pre_interest_ocf - interest_expense
-        fcf_before_financing = operating_cash_flow - build_capex - capitalized_maintenance
+        total_capex = build_capex + capitalized_maintenance
+        fcf_before_financing = operating_cash_flow - total_capex
         new_shares = equity_raised / max(_num(values.get("equity_issue_price"), _num(market.get("price"), 1.0)), 0.01)
         sbc_shares = shares * _num(values.get("sbc_dilution_pct"))
         repurchases = min(_num(values.get("share_repurchases")), shares + new_shares + sbc_shares)
@@ -856,6 +905,10 @@ def run_driver_model(
             "Revenue per Unit": revenue_per_unit,
             "Revenue": revenue,
             "Revenue Growth": revenue / prior_revenue - 1 if prior_revenue else None,
+            "Gross Profit": gross_profit,
+            "Gross Margin": gross_margin,
+            "OPEX": opex,
+            "OPEX % Revenue": opex / revenue if revenue else None,
             "Adjusted EBITDA": ebitda,
             "EBITDA Margin": ebitda_margin,
             "Maintenance Operating Expense": maintenance_expense,
@@ -864,6 +917,7 @@ def run_driver_model(
             "Infrastructure CAPEX": infrastructure_capex,
             "Land CAPEX": land_capex,
             "Build CAPEX": build_capex,
+            "Total CAPEX": total_capex,
             "Hardware Depreciation": hardware_depr,
             "Infrastructure Depreciation": infra_depr,
             "Depreciation": depreciation,
@@ -875,6 +929,7 @@ def run_driver_model(
             "Net Income": net_income,
             "NOPAT": nopat,
             "Operating Cash Flow": operating_cash_flow,
+            "Operating Cash Flow Margin": operating_cash_flow / revenue if revenue else None,
             "Free Cash Flow Before Financing": fcf_before_financing,
             "Customer Prepayments": customer_prepayments,
             "Government Grants / Subsidies": grant_funding,
@@ -919,9 +974,9 @@ def run_driver_model(
     return DriverModelResult(
         driver_forecast=table[["Period", "Beginning Capacity", "Capacity Added", "Ending Capacity", "Average Capacity", "Utilization", "Revenue per Unit"]].to_dict("list"),
         revenue_forecast=table[["Period", "Revenue", "Revenue Growth"]].to_dict("list"),
-        income_statement=table[["Period", "Revenue", "Adjusted EBITDA", "EBITDA Margin", "Maintenance Operating Expense", "Depreciation", "EBIT", "EBIT Margin", "Interest Expense", "Pretax Income", "Tax Expense", "Net Income", "NOPAT"]].to_dict("list"),
-        cash_flow=table[["Period", "Adjusted EBITDA", "Maintenance Operating Expense", "Interest Expense", "Tax Expense", "Operating Cash Flow", "Build CAPEX", "Capitalized Maintenance CAPEX", "Free Cash Flow Before Financing"]].to_dict("list"),
-        funding_schedule=table[["Period", "Build CAPEX", "Capitalized Maintenance CAPEX", "Free Cash Flow Before Financing", "Customer Prepayments", "Government Grants / Subsidies", "Equity Raised", "Debt Drawn", "Debt Repaid", "Ending Cash", "Ending Debt", "Ending Net Debt"]].to_dict("list"),
+        income_statement=table[["Period", "Revenue", "Revenue Growth", "Gross Profit", "Gross Margin", "OPEX", "OPEX % Revenue", "Adjusted EBITDA", "EBITDA Margin", "Maintenance Operating Expense", "Depreciation", "EBIT", "EBIT Margin", "Interest Expense", "Pretax Income", "Tax Expense", "Net Income", "NOPAT"]].to_dict("list"),
+        cash_flow=table[["Period", "Adjusted EBITDA", "Maintenance Operating Expense", "Interest Expense", "Tax Expense", "Operating Cash Flow", "Operating Cash Flow Margin", "Build CAPEX", "Capitalized Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing"]].to_dict("list"),
+        funding_schedule=table[["Period", "Build CAPEX", "Capitalized Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing", "Customer Prepayments", "Government Grants / Subsidies", "Equity Raised", "Debt Drawn", "Debt Repaid", "Ending Cash", "Ending Debt", "Ending Net Debt"]].to_dict("list"),
         debt_schedule=table[["Period", "Beginning Debt", "Debt Drawn", "Debt Repaid", "Ending Debt", "Average Debt", "Interest Expense"]].to_dict("list"),
         share_schedule=table[["Period", "New Shares Issued", "SBC Shares", "Share Repurchases", "Diluted Shares", "Cumulative Dilution"]].to_dict("list"),
         depreciation_schedule=table[["Period", "Hardware Depreciation", "Infrastructure Depreciation", "Depreciation", "Land CAPEX"]].to_dict("list"),
@@ -956,6 +1011,10 @@ def driver_result_table(result: DriverModelResult) -> pd.DataFrame:
         "Revenue per Blackwell GW": "Blackwell revenue = average Blackwell GW x utilization x revenue/GW.",
         "Revenue per Rubin GW": "Rubin revenue = average Rubin GW x utilization x revenue/GW.",
         "Revenue": "Driver output that feeds the DCF revenue forecast.",
+        "Gross Profit": "Revenue x profile-specific gross margin proxy.",
+        "Gross Margin %": "Gross profit / revenue.",
+        "OPEX": "Gross profit less adjusted EBITDA; proxy for S&M/R&D/G&A or operating cost burden.",
+        "OPEX % Revenue": "OPEX / revenue.",
         "Adjusted EBITDA": "Revenue x adjusted EBITDA margin.",
         "EBITDA Margin %": "Adjusted EBITDA / revenue.",
         "Maintenance Expense": "Operating maintenance expense when expensed rather than capitalized.",
@@ -1014,6 +1073,10 @@ def driver_result_table(result: DriverModelResult) -> pd.DataFrame:
             add("Operating Drivers", label, drivers, column)
     for label, column in [
         ("Revenue", "Revenue"),
+        ("Gross Profit", "Gross Profit"),
+        ("Gross Margin %", "Gross Margin"),
+        ("OPEX", "OPEX"),
+        ("OPEX % Revenue", "OPEX % Revenue"),
         ("Adjusted EBITDA", "Adjusted EBITDA"),
         ("EBITDA Margin %", "EBITDA Margin"),
         ("Maintenance Expense", "Maintenance Operating Expense"),
@@ -1367,6 +1430,7 @@ def integrate_driver_valuation(
     )
     return IntegratedValuationResult(
         selected_scenario=selected_scenario,
+        profile=profile.model_type,
         driver_model=driver_result,
         dcf_result=dcf_result,
         method_results=methods,

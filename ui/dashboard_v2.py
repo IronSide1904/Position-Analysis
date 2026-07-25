@@ -2806,7 +2806,9 @@ def _scenario_valuation_summary(state: ScenarioModelState, market: dict) -> pd.D
     for case in ["Bear Case", "Base Case", "User Case", "Bull Case"]:
         rows.append({"Scenario": case.replace(" Case", ""), "Fair Value / Share": outputs.get(case, {}).get("fair_value_per_share")})
     rows.append({"Scenario": "Market Price", "Fair Value / Share": market.get("price")})
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    frame["Fair Value / Share"] = pd.to_numeric(frame["Fair Value / Share"], errors="coerce").replace([float("inf"), float("-inf")], pd.NA)
+    return frame.dropna(subset=["Fair Value / Share"])
 
 
 def validate_scenario_consistency(ctx: dict, state: ScenarioModelState) -> list[str]:
@@ -4451,15 +4453,18 @@ def _driver_chart_frame(integrated, columns: list[str]) -> pd.DataFrame:
     if merged is None or merged.empty:
         return pd.DataFrame()
     keep = ["Period", *[col for col in columns if col in merged]]
-    return merged[keep].set_index("Period")
+    chart_frame = merged[keep].set_index("Period")
+    for col in chart_frame.columns:
+        chart_frame[col] = pd.to_numeric(chart_frame[col], errors="coerce").replace([float("inf"), float("-inf")], pd.NA)
+    return chart_frame.dropna(axis=1, how="all")
 
 
 def _render_driver_charts(integrated, scenario_state: ScenarioModelState, market: dict) -> None:
     chart_modes = {
-        "Operating drivers": ["Total Energized GW", "Average Total GW", "Utilization"],
-        "Financial outputs": ["Revenue", "Adjusted EBITDA", "EBIT", "NOPAT"],
-        "Cash flow & funding": ["Operating Cash Flow", "Build CAPEX", "Total CAPEX", "Free Cash Flow Before Financing", "Ending Net Debt", "Diluted Shares"],
-        "Margins / ratios": ["EBITDA Margin", "EBIT Margin", "ROIC", "WACC", "ROIC Spread"],
+        "Operating drivers": ["Total Energized GW", "Average Total GW", "Ending Capacity", "Average Capacity", "Utilization", "Revenue per Unit"],
+        "Financial outputs": ["Revenue", "Gross Profit", "OPEX", "Adjusted EBITDA", "EBIT", "NOPAT"],
+        "Cash flow & funding": ["Operating Cash Flow", "Build CAPEX", "Growth CAPEX", "Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing", "Ending Net Debt", "Diluted Shares"],
+        "Margins / ratios": ["Gross Margin", "OPEX % Revenue", "EBITDA Margin", "EBIT Margin", "Operating Cash Flow Margin", "ROIC", "WACC", "ROIC Spread"],
     }
     mode = st.segmented_control("Chart mode", list(chart_modes), default="Financial outputs", key=f"driver_chart_mode_{scenario_state.ticker}") or "Financial outputs"
     available = _driver_chart_frame(integrated, chart_modes[mode])
@@ -4481,7 +4486,8 @@ def _driver_scenario_marker_table(matrix: pd.DataFrame, years: int, profile_name
     last_period = period_labels(years)[-1]
     template = get_driver_template(profile_name)
     rules = template.get("scenario_rules", {})
-    key_rows = matrix[matrix["row_key"].isin(DRIVER_KEY_ROWS) | matrix["Category"].isin(["Capacity", "Unit Economics", "Margins", "Reinvestment / CAPEX", "Funding", "Dilution", "Valuation"])].copy()
+    template_rows = template.get("default_driver_rows", [])
+    key_rows = matrix[matrix["row_key"].isin(template_rows or DRIVER_KEY_ROWS) | matrix["Category"].isin(["Capacity", "Unit Economics", "Margins", "Reinvestment / CAPEX", "Funding", "Dilution", "Valuation"])].copy()
     rows = []
     for _, item in key_rows.iterrows():
         value = _assumption_float(item.get(last_period), 0.0)
@@ -4511,9 +4517,10 @@ def _driver_scenario_marker_table(matrix: pd.DataFrame, years: int, profile_name
                 "Base Case": value,
                 "User Case": value,
                 "Bull Case": bull,
-                "Market-Implied": "Use solver",
+                "Market-Implied": "Use solver / Not solved directly",
                 "Source / basis": item.get("Method"),
                 "Model impact": item.get("Model Impact"),
+                "Confidence": item.get("Confidence"),
                 "Reasonable range": item.get("Reasonable Range"),
                 "User note": item.get("User Note"),
             }
@@ -4524,24 +4531,35 @@ def _driver_scenario_marker_table(matrix: pd.DataFrame, years: int, profile_name
 def _driver_missing_data_plan(profile_name: str, matrix: pd.DataFrame) -> pd.DataFrame:
     template = get_driver_template(profile_name)
     rows = []
-    important = template.get("driver_groups", {}).get("Capacity", []) + template.get("driver_groups", {}).get("Unit Economics", []) + template.get("driver_groups", {}).get("Funding", [])
+    important = []
+    for keys in template.get("driver_groups", {}).values():
+        important.extend(keys)
+    present = set(matrix.get("row_key", [])) if matrix is not None and not matrix.empty else set()
     for key in important:
-        if matrix is None or matrix.empty or key not in set(matrix.get("row_key", [])):
+        if key not in present:
             rows.append(
                 {
-                    "Missing driver": key,
+                    "Driver": key,
                     "Why it matters": "This driver determines the operating forecast before generic DCF assumptions are set.",
                     "Where to verify": "Investor presentation, company IR, SEC business section, earnings call transcript, customer/backlog disclosures.",
-                    "Suggested keywords": "Rubin, Blackwell, GW, capacity, energized, data center, capex, prepayments, utilization, revenue per GW",
+                    "Suggested filing section": "Business, MD&A, segment note, liquidity/capital resources, risk factors.",
+                    "Suggested keywords": "capacity, customers, backlog, utilization, retention, pricing, capex, working capital, dilution",
+                    "Model assumption affected": "Revenue, OPEX, OCF, CAPEX, debt, dilution, terminal value.",
+                    "Fallback used": "Template default / Base Case assumption.",
+                    "Confidence impact": "Medium confidence reduction until verified.",
                 }
             )
-    if not rows:
+    for question in template.get("manual_review_questions", [])[:6]:
         rows.append(
             {
-                "Missing driver": "No critical template rows missing",
-                "Why it matters": "Driver template is populated with editable assumptions.",
-                "Where to verify": "Still validate source evidence before relying on estimates.",
-                "Suggested keywords": "capacity, pricing, utilization, capex, prepayments, dilution",
+                "Driver": "Manual review",
+                "Why it matters": question,
+                "Where to verify": "Company filings, earnings call, investor deck, peer disclosures.",
+                "Suggested filing section": "Business / MD&A / financial statement notes.",
+                "Suggested keywords": "driver-specific; use selected profile context.",
+                "Model assumption affected": "Selected profile driver assumptions.",
+                "Fallback used": "Existing dashboard estimate remains until reviewed.",
+                "Confidence impact": "Lowers confidence if unresolved.",
             }
         )
     return pd.DataFrame(rows)
@@ -4603,8 +4621,7 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
     st.session_state[f"driver_profile_{ticker}"] = model_type
     profile = build_business_model_profile(model_type)
     template = get_driver_template(model_type)
-    if model_type == "AI Infrastructure / Data Center":
-        st.markdown('<div class="pa-section-title">AI Infrastructure Driver Workbench</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pa-section-title">Business Driver Workbench</div>', unsafe_allow_html=True)
     st.caption(template.get("description", "Business-driver template selected."))
     profile_cols = st.columns(3)
     treatment = profile_cols[0].selectbox(
@@ -4624,14 +4641,17 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
     matrix = st.session_state[matrix_key]
     display = _driver_matrix_to_display(matrix, years)
     period_cols = period_labels(years)
-    if model_type == "AI Infrastructure / Data Center":
+    template_rows = template.get("default_driver_rows", [])
+    if template_rows:
+        key_mask = display["row_key"].isin(template_rows)
+    elif model_type == "AI Infrastructure / Data Center":
         key_mask = display["Category"].isin(["Capacity", "Unit Economics", "Operating Drivers", "Utilization", "Margins", "Reinvestment / CAPEX", "Funding", "Dilution", "Valuation"])
     else:
         key_mask = display["row_key"].isin(DRIVER_KEY_ROWS)
     key_display = display[key_mask].copy()
     advanced_display = display[~key_mask].copy()
 
-    st.markdown('<div class="pa-section-title">Key Model Drivers</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pa-section-title">Core Business Drivers</div>', unsafe_allow_html=True)
     st.caption("Percentage rows use human units: enter 80 for 80%. Historical / LTM and forecast driver cells are estimates unless evidence says otherwise.")
     edited_key = st.data_editor(
         key_display,

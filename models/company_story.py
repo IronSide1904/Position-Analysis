@@ -8,6 +8,7 @@ import pandas as pd
 from analysis.filing_section_splitter import split_filing_into_sections
 from analysis.filing_text_cleaner import clean_filing_html
 from models.business_drivers import infer_business_driver_profile
+from models.driver_templates import get_driver_template
 
 
 def _clean_text(value: Any) -> str:
@@ -188,6 +189,16 @@ def build_company_story_summary(
     sources_used.extend(peer_sources)
     sources_used.extend(buzz_sources)
     driver_profile = infer_business_driver_profile(dataset, filing_texts)
+    driver_template = get_driver_template(driver_profile["profile"])
+    driver_examples = []
+    for group, keys in driver_template.get("driver_groups", {}).items():
+        if keys:
+            driver_examples.append(group.lower())
+    key_driver_text = (
+        "energized GW capacity, chip generation mix, revenue per GW, utilization, build cost per GW, customer prepayments, debt funding, and share dilution"
+        if driver_profile["profile"] == "AI Infrastructure / Data Center"
+        else ", ".join(driver_examples[:5]) or "revenue growth, margins, cash conversion, reinvestment, dilution, and terminal value"
+    )
 
     product_story = _clip(description or filing_summary or "Product and service detail unavailable from loaded sources.", 360)
     how_money = (
@@ -200,9 +211,8 @@ def build_company_story_summary(
         {
             "assumption": "Business Driver Profile",
             "implication": (
-                "Key drivers: energized GW capacity, chip generation mix, revenue per GW, utilization, build cost per GW, customer prepayments, debt funding, and share dilution."
-                if driver_profile["profile"] == "AI Infrastructure / Data Center"
-                else f"Use the {driver_profile['profile']} driver template before editing generic DCF assumptions."
+                f"This company appears to fit the {driver_profile['profile']} profile. "
+                f"Key valuation drivers are {key_driver_text}."
             ),
             "confidence": driver_profile["confidence"],
         },

@@ -51,7 +51,7 @@ def solve_market_implied_drivers(
     profile: str,
     current_market_value: dict,
     base_drivers: pd.DataFrame,
-    target_metric: str,
+    target_metric: str | None = None,
     historicals: pd.DataFrame | None = None,
     assumptions: dict | None = None,
 ) -> dict:
@@ -60,6 +60,8 @@ def solve_market_implied_drivers(
     """
     assumptions = assumptions or {"forecast_years": 5}
     model_profile = build_business_model_profile(profile)
+    if not target_metric:
+        target_metric = "utilization" if profile != "AI Infrastructure / Data Center" else "revenue_per_blackwell_gw"
     bounds = {
         "utilization": (0.10, 0.95),
         "revenue_per_blackwell_gw": (250_000_000.0, 5_000_000_000.0),
@@ -70,6 +72,13 @@ def solve_market_implied_drivers(
         "blackwell_gw_deployed": (0.0, 10.0),
         "rubin_gw_deployed": (0.0, 10.0),
     }
+    if target_metric not in bounds and (base_drivers is None or base_drivers.empty or target_metric not in set(base_drivers.get("row_key", []))):
+        return {
+            "driver": target_metric,
+            "status": "Not solved directly",
+            "required_value": None,
+            "explanation": "Using Base Case assumption; manual review required for this profile-specific driver.",
+        }
     low, high = bounds.get(target_metric, (0.0, 1.0))
     return solve_market_implied_driver(
         model_profile,
@@ -109,7 +118,8 @@ def build_cwb_style_tables(integrated_result, market: dict, assumptions: dict) -
     funding = pd.DataFrame(driver.funding_schedule)
     shares = pd.DataFrame(driver.share_schedule)
     methods = pd.DataFrame([item.__dict__ for item in integrated_result.method_results])
-    template = get_driver_template(getattr(integrated_result, "profile", "") or "AI Infrastructure / Data Center")
+    profile = getattr(integrated_result, "profile", "") or "General"
+    template = get_driver_template(profile)
 
     key_inputs = pd.DataFrame(
         [
@@ -122,9 +132,10 @@ def build_cwb_style_tables(integrated_result, market: dict, assumptions: dict) -
             {"Input": "Terminal / target year", "Value": drivers["Period"].iloc[-1] if not drivers.empty else None, "Assumption / basis": "Last explicit forecast year."},
         ]
     )
-    capacity = _transpose_schedule(
-        drivers,
-        [
+    if "Blackwell GW Deployed" in drivers.columns:
+        driver_build_name = "Capacity Buildout"
+        unit_economics_name = "Per-GW Economics"
+        capacity_rows = [
             ("Blackwell GW deployed", "Blackwell GW Deployed", "Ending GW by chip generation."),
             ("Rubin GW deployed", "Rubin GW Deployed", "Ending GW by chip generation."),
             ("Other GW deployed", "Other GW Deployed", "Ending non-Blackwell/Rubin GW."),
@@ -132,11 +143,8 @@ def build_cwb_style_tables(integrated_result, market: dict, assumptions: dict) -
             ("Average Blackwell GW", "Average Blackwell GW", "Average GW = (beginning + ending) / 2."),
             ("Average Rubin GW", "Average Rubin GW", "Average GW = (beginning + ending) / 2."),
             ("Average total GW", "Average Total GW", "Average Blackwell + Rubin + Other GW."),
-        ],
-    )
-    economics = _transpose_schedule(
-        drivers,
-        [
+        ]
+        economics_rows = [
             ("Revenue per Blackwell GW", "Revenue per Blackwell GW", "Revenue = average GW x revenue/GW x utilization."),
             ("Revenue per Rubin GW", "Revenue per Rubin GW", "Revenue = average GW x revenue/GW x utilization."),
             ("Hardware cost per Blackwell GW", "Hardware Cost per Blackwell GW", "Growth CAPEX input."),
@@ -144,8 +152,27 @@ def build_cwb_style_tables(integrated_result, market: dict, assumptions: dict) -
             ("Land / power / cooling cost per GW", "Land / Power / Cooling Cost per Blackwell GW", "Infrastructure cost bucket."),
             ("Total build cost per Blackwell GW", "Total Build Cost per Blackwell GW", "Hardware + land/power/cooling per GW."),
             ("Total build cost per Rubin GW", "Total Build Cost per Rubin GW", "Hardware + land/power/cooling per GW."),
-        ],
-    )
+        ]
+    else:
+        if profile == "SaaS / Software":
+            driver_build_name, unit_economics_name = "ARR / Revenue Build", "Retention & Customer Economics"
+        elif profile == "Industrial / Hardware":
+            driver_build_name, unit_economics_name = "Backlog / Orders", "Production & Unit Economics"
+        elif profile == "General":
+            driver_build_name, unit_economics_name = "Revenue & Margin Drivers", "OPEX / Cash Conversion"
+        else:
+            driver_build_name, unit_economics_name = "Core Driver Build", "Unit Economics"
+        capacity_rows = [
+            ("Capacity / activity", "Ending Capacity", "Selected profile activity base; examples include customers, units, GMV, production, properties, or traffic."),
+            ("Capacity added / growth", "Capacity Added", "Period activity growth proxy."),
+            ("Average capacity", "Average Capacity", "Beginning plus ending activity base divided by two."),
+            ("Utilization / retention / conversion", "Utilization", "Profile-specific quality driver such as NRR, occupancy, fill rate, backlog conversion, or utilization."),
+        ]
+        economics_rows = [
+            ("Revenue per unit / price driver", "Revenue per Unit", "Revenue = average activity base x utilization/conversion x revenue per unit."),
+        ]
+    capacity = _transpose_schedule(drivers, capacity_rows)
+    economics = _transpose_schedule(drivers, economics_rows)
     projected = _transpose_schedule(
         income.merge(cash, on="Period", how="outer", suffixes=("", "_cash")).merge(funding, on="Period", how="outer", suffixes=("", "_funding")).merge(shares, on="Period", how="outer"),
         [
@@ -197,12 +224,14 @@ def build_cwb_style_tables(integrated_result, market: dict, assumptions: dict) -
             for _, row in methods.iterrows()
         ]
     )
-    return {
+    tables = {
         "Key Inputs": key_inputs,
-        "Driver Buildout": capacity,
-        "Per-Unit Economics": economics,
+        driver_build_name: capacity,
+        unit_economics_name: economics,
         "Projected Financials": projected,
         "Cash Flow & Funding": funding_table,
         "Target-Year Valuation": valuation,
         "Template": pd.DataFrame([{"Profile": template["profile"], "Description": template["description"], "Assumption / basis": "Selected business-driver template."}]),
     }
+    tables.setdefault("Driver Buildout", capacity)
+    return tables
