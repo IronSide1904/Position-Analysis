@@ -45,6 +45,9 @@ from models.dcf_model import (
 )
 from models.assumption_estimates import run_assumption_sanity_checks
 from models.company_story import build_company_story_summary
+from models.business_drivers import infer_business_driver_profile
+from models.driver_forecast import build_cwb_style_tables, solve_market_implied_drivers
+from models.driver_templates import driver_profile_options, get_driver_template
 from models.financial_derivations import add_percentage_change_rows
 from models.financial_model import (
     build_ev_to_equity_bridge,
@@ -4431,8 +4434,10 @@ def _driver_summary_cards(integrated, market: dict) -> list[dict]:
 
 def _driver_chart_frame(integrated, columns: list[str]) -> pd.DataFrame:
     frames = [
+        pd.DataFrame(integrated.driver_model.driver_forecast),
         pd.DataFrame(integrated.driver_model.income_statement),
         pd.DataFrame(integrated.driver_model.funding_schedule),
+        pd.DataFrame(integrated.driver_model.share_schedule),
         pd.DataFrame(integrated.driver_model.roic_schedule),
     ]
     merged = None
@@ -4450,24 +4455,96 @@ def _driver_chart_frame(integrated, columns: list[str]) -> pd.DataFrame:
 
 
 def _render_driver_charts(integrated, scenario_state: ScenarioModelState, market: dict) -> None:
-    c1, c2 = st.columns(2)
-    with c1:
-        profit = _driver_chart_frame(integrated, ["Revenue", "Adjusted EBITDA", "EBIT"])
-        if not profit.empty:
-            st.line_chart(profit)
-    with c2:
-        funding = _driver_chart_frame(integrated, ["Build CAPEX", "Customer Prepayments", "Equity Raised", "Debt Drawn"])
-        if not funding.empty:
-            st.bar_chart(funding)
-    c3, c4 = st.columns(2)
-    with c3:
-        roic = _driver_chart_frame(integrated, ["ROIC", "WACC", "ROIC Spread"])
-        if not roic.empty:
-            st.line_chart(roic)
-    with c4:
+    chart_modes = {
+        "Operating drivers": ["Total Energized GW", "Average Total GW", "Utilization"],
+        "Financial outputs": ["Revenue", "Adjusted EBITDA", "EBIT", "NOPAT"],
+        "Cash flow & funding": ["Operating Cash Flow", "Build CAPEX", "Total CAPEX", "Free Cash Flow Before Financing", "Ending Net Debt", "Diluted Shares"],
+        "Margins / ratios": ["EBITDA Margin", "EBIT Margin", "ROIC", "WACC", "ROIC Spread"],
+    }
+    mode = st.segmented_control("Chart mode", list(chart_modes), default="Financial outputs", key=f"driver_chart_mode_{scenario_state.ticker}") or "Financial outputs"
+    available = _driver_chart_frame(integrated, chart_modes[mode])
+    if available.empty:
+        st.info("No driver chart data available for this mode.")
+    else:
+        selected_lines = st.multiselect("Visible lines", list(available.columns), default=list(available.columns), key=f"driver_chart_lines_{scenario_state.ticker}_{mode}")
+        if selected_lines:
+            st.line_chart(available[selected_lines])
+    with st.expander("Scenario valuation chart", expanded=False):
         valuation_chart_data = _scenario_valuation_summary(scenario_state, market)
         if not valuation_chart_data.empty:
             st.bar_chart(valuation_chart_data.set_index("Scenario"))
+
+
+def _driver_scenario_marker_table(matrix: pd.DataFrame, years: int, profile_name: str) -> pd.DataFrame:
+    if matrix is None or matrix.empty:
+        return pd.DataFrame()
+    last_period = period_labels(years)[-1]
+    template = get_driver_template(profile_name)
+    rules = template.get("scenario_rules", {})
+    key_rows = matrix[matrix["row_key"].isin(DRIVER_KEY_ROWS) | matrix["Category"].isin(["Capacity", "Unit Economics", "Margins", "Reinvestment / CAPEX", "Funding", "Dilution", "Valuation"])].copy()
+    rows = []
+    for _, item in key_rows.iterrows():
+        value = _assumption_float(item.get(last_period), 0.0)
+        category = str(item.get("Category") or "")
+        bear_rule = rules.get("Bear Case", {})
+        bull_rule = rules.get("Bull Case", {})
+        if category == "Capacity":
+            bear = value * bear_rule.get("capacity", 0.85)
+            bull = value * bull_rule.get("capacity", 1.15)
+        elif category == "Unit Economics":
+            bear = value * bear_rule.get("unit_economics", 0.90)
+            bull = value * bull_rule.get("unit_economics", 1.10)
+        elif category in {"Margins", "Operating Drivers"} and item.get("Unit") == "%":
+            bear = value + bear_rule.get("margin_delta", -0.03) * 100
+            bull = value + bull_rule.get("margin_delta", 0.03) * 100
+        elif category == "Reinvestment / CAPEX":
+            bear = value * bear_rule.get("capex", 1.10)
+            bull = value * bull_rule.get("capex", 0.95)
+        else:
+            bear = value
+            bull = value
+        rows.append(
+            {
+                "Driver": item.get("Driver"),
+                "Unit": item.get("Unit"),
+                "Bear Case": bear,
+                "Base Case": value,
+                "User Case": value,
+                "Bull Case": bull,
+                "Market-Implied": "Use solver",
+                "Source / basis": item.get("Method"),
+                "Model impact": item.get("Model Impact"),
+                "Reasonable range": item.get("Reasonable Range"),
+                "User note": item.get("User Note"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _driver_missing_data_plan(profile_name: str, matrix: pd.DataFrame) -> pd.DataFrame:
+    template = get_driver_template(profile_name)
+    rows = []
+    important = template.get("driver_groups", {}).get("Capacity", []) + template.get("driver_groups", {}).get("Unit Economics", []) + template.get("driver_groups", {}).get("Funding", [])
+    for key in important:
+        if matrix is None or matrix.empty or key not in set(matrix.get("row_key", [])):
+            rows.append(
+                {
+                    "Missing driver": key,
+                    "Why it matters": "This driver determines the operating forecast before generic DCF assumptions are set.",
+                    "Where to verify": "Investor presentation, company IR, SEC business section, earnings call transcript, customer/backlog disclosures.",
+                    "Suggested keywords": "Rubin, Blackwell, GW, capacity, energized, data center, capex, prepayments, utilization, revenue per GW",
+                }
+            )
+    if not rows:
+        rows.append(
+            {
+                "Missing driver": "No critical template rows missing",
+                "Why it matters": "Driver template is populated with editable assumptions.",
+                "Where to verify": "Still validate source evidence before relying on estimates.",
+                "Suggested keywords": "capacity, pricing, utilization, capex, prepayments, dilution",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _driver_model_workbench(ctx: dict, selected_case: str):
@@ -4477,7 +4554,7 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
     historicals = ctx.get("historicals")
     base = _normalize_assumption_bridge(ctx.get("base_assumptions", {}))
     years = int(base.get("forecast_years", 5) or 5)
-    inferred_profile = infer_business_model_profile(dataset)
+    detected_profile = infer_business_driver_profile(dataset, ctx.get("filing_texts"))
     inferred_mode = "Driver-Based"
 
     render_section(
@@ -4485,27 +4562,50 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
         "Operational drivers feed revenue, CAPEX, funding, depreciation, ROIC, WACC, valuation methods, and the active User Case DCF.",
         "Integrated Model",
     )
-    mode = st.segmented_control(
-        "Modeling mode",
-        ["Driver-Based", "Standard Financial"],
-        default=st.session_state.get(f"driver_mode_{ticker}", inferred_mode),
+    method_options = ["Driver-Based DCF", "Generic DCF", "SOTP", "Multiples"]
+    stored_method = st.session_state.get(f"driver_mode_{ticker}")
+    if stored_method == "Driver-Based":
+        stored_method = "Driver-Based DCF"
+    elif stored_method == "Standard Financial":
+        stored_method = "Generic DCF"
+    if stored_method not in method_options:
+        stored_method = "Driver-Based DCF" if inferred_mode == "Driver-Based" else "Generic DCF"
+    method_choice = st.segmented_control(
+        "Valuation Method",
+        method_options,
+        default=stored_method,
         key=f"driver_mode_control_{ticker}",
-    ) or inferred_mode
-    st.session_state[f"driver_mode_{ticker}"] = mode
-    if mode == "Standard Financial":
-        st.info("Standard Financial mode is active. Use the DCF assumption matrix below for the conventional model.")
-        return None, None, mode
+        help="Driver-Based DCF is the operating-driver layer above the standard financial DCF. Generic DCF remains available as fallback.",
+    ) or "Driver-Based DCF"
+    st.session_state[f"driver_mode_{ticker}"] = method_choice
+    if method_choice != "Driver-Based DCF":
+        st.info(f"{method_choice} selected. Use the standard financial assumption matrix below; driver-based DCF remains available as a switch.")
+        return None, None, "Standard Financial"
 
-    profile_default = inferred_profile.model_type if inferred_profile.model_type != "Standard Financial" and inferred_profile.model_type in MODEL_TYPES else "Custom"
+    render_status_grid(
+        [
+            {"title": "Business Driver Profile", "value": detected_profile["profile"], "subtitle": detected_profile["reason"], "status": "info"},
+            {"title": "Driver Confidence", "value": detected_profile["confidence"], "subtitle": "Inference can be overridden below.", "status": "supportive" if detected_profile["confidence"] == "High" else "neutral"},
+            {"title": "Alternatives", "value": ", ".join(detected_profile.get("alternative_profiles", [])[:2]) or "General", "subtitle": "Use override if the detected business model is wrong.", "status": "neutral"},
+        ],
+        numeric=False,
+    )
+
+    profile_default = detected_profile["profile"] if detected_profile["profile"] in MODEL_TYPES else "General"
+    profile_options = [item for item in driver_profile_options() if item in MODEL_TYPES]
     model_type = st.selectbox(
-        "Business model profile",
-        MODEL_TYPES,
-        index=MODEL_TYPES.index(st.session_state.get(f"driver_profile_{ticker}", profile_default)) if st.session_state.get(f"driver_profile_{ticker}", profile_default) in MODEL_TYPES else MODEL_TYPES.index(profile_default),
+        "Business Driver Profile",
+        profile_options,
+        index=profile_options.index(st.session_state.get(f"driver_profile_{ticker}", profile_default)) if st.session_state.get(f"driver_profile_{ticker}", profile_default) in profile_options else profile_options.index(profile_default),
         key=f"driver_profile_select_{ticker}",
         help="Choose the operating-driver lens. Defaults are generic and can be overridden; no ticker-specific assumptions are hardcoded.",
     )
     st.session_state[f"driver_profile_{ticker}"] = model_type
     profile = build_business_model_profile(model_type)
+    template = get_driver_template(model_type)
+    if model_type == "AI Infrastructure / Data Center":
+        st.markdown('<div class="pa-section-title">AI Infrastructure Driver Workbench</div>', unsafe_allow_html=True)
+    st.caption(template.get("description", "Business-driver template selected."))
     profile_cols = st.columns(3)
     treatment = profile_cols[0].selectbox(
         "Maintenance treatment",
@@ -4524,8 +4624,12 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
     matrix = st.session_state[matrix_key]
     display = _driver_matrix_to_display(matrix, years)
     period_cols = period_labels(years)
-    key_display = display[display["row_key"].isin(DRIVER_KEY_ROWS)].copy()
-    advanced_display = display[~display["row_key"].isin(DRIVER_KEY_ROWS)].copy()
+    if model_type == "AI Infrastructure / Data Center":
+        key_mask = display["Category"].isin(["Capacity", "Unit Economics", "Operating Drivers", "Utilization", "Margins", "Reinvestment / CAPEX", "Funding", "Dilution", "Valuation"])
+    else:
+        key_mask = display["row_key"].isin(DRIVER_KEY_ROWS)
+    key_display = display[key_mask].copy()
+    advanced_display = display[~key_mask].copy()
 
     st.markdown('<div class="pa-section-title">Key Model Drivers</div>', unsafe_allow_html=True)
     st.caption("Percentage rows use human units: enter 80 for 80%. Historical / LTM and forecast driver cells are estimates unless evidence says otherwise.")
@@ -4535,16 +4639,20 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
         hide_index=True,
         height=520,
         column_config={"row_key": None},
-        disabled=["row_key", "Category", "Driver", "Unit", "Method", "Evidence Grade", "Confidence", "Warning", "Historical / LTM"],
+        disabled=["row_key", "Category", "Driver", "Unit", "Method", "Evidence Grade", "Confidence", "Warning", "Model Impact", "Reasonable Range", "Historical / LTM"],
         key=f"driver_key_matrix_{ticker}_{selected_case}_{model_type}",
     )
+    with st.expander("Driver Scenario Markers and Evidence Context", expanded=False):
+        st.caption("This shows Base/Bear/Bull/User markers for the target year. Market-implied values are solved in the dedicated solver below when feasible.")
+        show_table(_driver_scenario_marker_table(edited_key, years, model_type), "No scenario marker table available.")
+        show_table(_driver_missing_data_plan(model_type, edited_key), "No driver review plan available.")
     with st.expander("Advanced Operating / Funding / Valuation Assumptions", expanded=False):
         edited_advanced = st.data_editor(
             advanced_display,
             width="stretch",
             hide_index=True,
             column_config={"row_key": None},
-            disabled=["row_key", "Category", "Driver", "Unit", "Method", "Evidence Grade", "Confidence", "Warning", "Historical / LTM"],
+            disabled=["row_key", "Category", "Driver", "Unit", "Method", "Evidence Grade", "Confidence", "Warning", "Model Impact", "Reasonable Range", "Historical / LTM"],
             key=f"driver_advanced_matrix_{ticker}_{selected_case}_{model_type}",
         )
     edited_display = pd.concat([edited_key, edited_advanced], ignore_index=True)
@@ -4576,6 +4684,7 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
     _notice(integrated.economic_interpretation, "warning" if "value destructive" in integrated.economic_interpretation.lower() else "success")
 
     st.markdown('<div class="pa-section-title">Projected Financials</div>', unsafe_allow_html=True)
+    st.caption("Driver-based tables include an Assumption / basis column so each line item explains the model logic.")
     show_table(driver_result_table(integrated.driver_model), "Driver-based forecast unavailable.")
     st.markdown('<div class="pa-section-title">Capital and Funding</div>', unsafe_allow_html=True)
     show_table(pd.DataFrame(integrated.driver_model.funding_schedule), "Funding schedule unavailable.")
@@ -4593,27 +4702,47 @@ def _driver_model_workbench(ctx: dict, selected_case: str):
         show_table(pd.DataFrame(integrated.driver_model.depreciation_schedule), "Depreciation schedule unavailable.")
         show_table(pd.DataFrame({"Warning": integrated.driver_model.warnings}), "No critical driver-model warnings.")
     with st.expander("User vs Market-Implied Driver Solver", expanded=False):
+        solver_options = ["utilization", "revenue_per_unit", "ebitda_margin", "exit_ebitda_multiple"]
+        if model_type == "AI Infrastructure / Data Center":
+            solver_options = ["utilization", "revenue_per_blackwell_gw", "revenue_per_rubin_gw", "adjusted_ebitda_margin", "exit_ebit_multiple", "exit_ebitda_multiple", "blackwell_gw_deployed", "rubin_gw_deployed"]
         solve_key = st.selectbox(
             "Solve for required driver",
-            ["utilization", "revenue_per_unit", "ebitda_margin", "exit_ebitda_multiple"],
+            solver_options,
             format_func=lambda key: {
                 "utilization": "Required utilization",
                 "revenue_per_unit": "Required revenue per unit",
+                "revenue_per_blackwell_gw": "Required Blackwell revenue per GW",
+                "revenue_per_rubin_gw": "Required Rubin revenue per GW",
                 "ebitda_margin": "Required steady-state EBITDA margin",
+                "adjusted_ebitda_margin": "Required adjusted EBITDA margin",
+                "blackwell_gw_deployed": "Required Blackwell GW",
+                "rubin_gw_deployed": "Required Rubin GW",
+                "exit_ebit_multiple": "Required exit EBIT multiple",
                 "exit_ebitda_multiple": "Required exit EBITDA multiple",
             }.get(key, key),
             key=f"driver_solver_key_{ticker}",
         )
-        bounds = {
-            "utilization": (0.10, 0.95),
-            "revenue_per_unit": (0.25 * _assumption_float(edited_matrix.loc[edited_matrix["row_key"] == "revenue_per_unit", period_cols[-1]].iloc[0], 1), 3.0 * _assumption_float(edited_matrix.loc[edited_matrix["row_key"] == "revenue_per_unit", period_cols[-1]].iloc[0], 1)),
-            "ebitda_margin": (-0.20, 0.80),
-            "exit_ebitda_multiple": (2.0, 35.0),
-        }
-        low, high = bounds[solve_key]
-        solved = solve_market_implied_driver(profile, edited_matrix, historicals, market, base, solve_key, low, high, years=years)
+        if model_type == "AI Infrastructure / Data Center":
+            solved = solve_market_implied_drivers(model_type, market, edited_matrix, solve_key, historicals, base)
+        else:
+            bounds = {
+                "utilization": (0.10, 0.95),
+                "revenue_per_unit": (0.25 * _assumption_float(edited_matrix.loc[edited_matrix["row_key"] == "revenue_per_unit", period_cols[-1]].iloc[0], 1), 3.0 * _assumption_float(edited_matrix.loc[edited_matrix["row_key"] == "revenue_per_unit", period_cols[-1]].iloc[0], 1)),
+                "ebitda_margin": (-0.20, 0.80),
+                "exit_ebitda_multiple": (2.0, 35.0),
+            }
+            low, high = bounds[solve_key]
+            solved = solve_market_implied_driver(profile, edited_matrix, historicals, market, base, solve_key, low, high, years=years)
+        st.caption("Approximate market-implied driver analysis.")
         show_table(pd.DataFrame([solved]), "Market-implied driver solve unavailable.")
-    return integrated, integrated.dcf_assumptions, mode
+    with st.expander("Generate CWB-Style Valuation View", expanded=False):
+        if st.button("Generate CWB-Style Valuation View", key=f"cwb_view_{ticker}_{selected_case}_{model_type}"):
+            st.session_state[f"show_cwb_view_{ticker}_{selected_case}_{model_type}"] = True
+        if st.session_state.get(f"show_cwb_view_{ticker}_{selected_case}_{model_type}"):
+            for title, table in build_cwb_style_tables(integrated, market, integrated.dcf_assumptions).items():
+                st.markdown(f"**{title}**")
+                show_table(table, f"{title} unavailable.")
+    return integrated, integrated.dcf_assumptions, "Driver-Based"
 
 
 def _analysis_state_cards(ctx: dict) -> list[dict]:

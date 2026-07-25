@@ -7,6 +7,7 @@ import pandas as pd
 
 from analysis.filing_section_splitter import split_filing_into_sections
 from analysis.filing_text_cleaner import clean_filing_html
+from models.business_drivers import infer_business_driver_profile
 
 
 def _clean_text(value: Any) -> str:
@@ -186,6 +187,7 @@ def build_company_story_summary(
     buzz_text, buzz_sources = _buzz_context(news_items, social_buzz, web_context)
     sources_used.extend(peer_sources)
     sources_used.extend(buzz_sources)
+    driver_profile = infer_business_driver_profile(dataset, filing_texts)
 
     product_story = _clip(description or filing_summary or "Product and service detail unavailable from loaded sources.", 360)
     how_money = (
@@ -196,8 +198,21 @@ def build_company_story_summary(
     has_buzz = buzz_text != "Social/news buzz unavailable."
     assumption_implications = [
         {
+            "assumption": "Business Driver Profile",
+            "implication": (
+                "Key drivers: energized GW capacity, chip generation mix, revenue per GW, utilization, build cost per GW, customer prepayments, debt funding, and share dilution."
+                if driver_profile["profile"] == "AI Infrastructure / Data Center"
+                else f"Use the {driver_profile['profile']} driver template before editing generic DCF assumptions."
+            ),
+            "confidence": driver_profile["confidence"],
+        },
+        {
             "assumption": "Revenue CAGR",
-            "implication": "Driven by demand, pricing, backlog/RPO, customer expansion, competition, and organic versus acquired growth.",
+            "implication": (
+                "Adjust only after reviewing capacity buildout, utilization, and revenue per GW."
+                if driver_profile["profile"] == "AI Infrastructure / Data Center"
+                else "Driven by demand, pricing, backlog/RPO, customer expansion, competition, and organic versus acquired growth."
+            ),
             "confidence": "Medium" if description or filing_summary else "Low",
         },
         {
@@ -207,13 +222,30 @@ def build_company_story_summary(
         },
         {
             "assumption": "OCF Margin",
-            "implication": "Depends on billing model, collections, working capital timing, deferred revenue, inventory, and cash conversion.",
+            "implication": (
+                "Adjust only after reviewing customer prepayments, interest expense, cash taxes, and working capital."
+                if driver_profile["profile"] == "AI Infrastructure / Data Center"
+                else "Depends on billing model, collections, working capital timing, deferred revenue, inventory, and cash conversion."
+            ),
             "confidence": "Low",
         },
         {
             "assumption": "CAPEX",
-            "implication": "Depends on asset intensity, equipment, infrastructure, capacity expansion, and maintenance needs.",
+            "implication": (
+                "Adjust only after reviewing build cost per GW, chip generation mix, and maintenance CAPEX."
+                if driver_profile["profile"] == "AI Infrastructure / Data Center"
+                else "Depends on asset intensity, equipment, infrastructure, capacity expansion, and maintenance needs."
+            ),
             "confidence": "Medium" if sector != "sector unavailable" else "Low",
+        },
+        {
+            "assumption": "Dilution",
+            "implication": (
+                "Adjust only after reviewing equity funding, issue price, SBC dilution, and buyback assumptions."
+                if driver_profile["profile"] == "AI Infrastructure / Data Center"
+                else "Depends on SBC, buybacks, acquisitions, and external funding needs."
+            ),
+            "confidence": "Low",
         },
         {
             "assumption": "Terminal Multiple",
@@ -233,4 +265,5 @@ def build_company_story_summary(
         "assumption_implications": assumption_implications,
         "manual_review_questions": manual_review,
         "sources_used": sources_used or ["Dashboard metadata only"],
+        "business_driver_profile": driver_profile,
     }

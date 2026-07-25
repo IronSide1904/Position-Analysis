@@ -1,5 +1,7 @@
 import pandas as pd
 
+from models.business_drivers import infer_business_driver_profile
+from models.driver_forecast import build_cwb_style_tables, build_driver_based_forecast
 from models.operating_driver_model import (
     build_business_model_profile,
     build_wacc_table,
@@ -223,3 +225,58 @@ def test_standard_financial_mode_still_runs_without_capacity_drivers():
 
     assert not income.empty
     assert income.loc[0, "Revenue"] == 1080.0
+
+
+def test_business_driver_profile_detects_ai_infrastructure():
+    profile = infer_business_driver_profile(
+        {
+            "company": "Example AI Cloud",
+            "industry": "Cloud infrastructure",
+            "company_description": "The company builds GPU data center capacity using NVIDIA Blackwell systems.",
+        }
+    )
+
+    assert profile["profile"] == "AI Infrastructure / Data Center"
+    assert profile["confidence"] in {"Medium", "High"}
+
+
+def test_ai_infrastructure_drivers_flow_to_financials():
+    profile = build_business_model_profile("AI Infrastructure / Data Center")
+    matrix = default_driver_matrix(profile, _historicals(), _market(), _assumptions(), years=5)
+    periods = ["FY1E", "FY2F", "FY3F", "FY4F", "FY5F"]
+    matrix.loc[matrix["row_key"] == "blackwell_gw_deployed", periods] = [1, 2, 3, 4, 5]
+    matrix.loc[matrix["row_key"] == "rubin_gw_deployed", periods] = [0, 0, 1, 2, 3]
+    matrix.loc[matrix["row_key"] == "other_gw_deployed", periods] = 0
+    matrix.loc[matrix["row_key"].isin(["blackwell_gw_deployed", "rubin_gw_deployed", "other_gw_deployed"]), "Historical / LTM"] = 0
+    matrix.loc[matrix["row_key"] == "utilization", periods] = 0.80
+    matrix.loc[matrix["row_key"] == "revenue_per_blackwell_gw", periods] = 1000.0
+    matrix.loc[matrix["row_key"] == "revenue_per_rubin_gw", periods] = 2000.0
+    matrix.loc[matrix["row_key"] == "adjusted_ebitda_margin", periods] = 0.40
+    matrix.loc[matrix["row_key"] == "hardware_cost_per_blackwell_gw", periods] = 100.0
+    matrix.loc[matrix["row_key"] == "hardware_cost_per_rubin_gw", periods] = 200.0
+    matrix.loc[matrix["row_key"] == "land_power_cooling_cost_per_blackwell_gw", periods] = 50.0
+    matrix.loc[matrix["row_key"] == "land_power_cooling_cost_per_rubin_gw", periods] = 75.0
+    matrix.loc[matrix["row_key"] == "gpu_useful_life", periods] = 5.0
+    matrix.loc[matrix["row_key"] == "infrastructure_useful_life", periods] = 15.0
+
+    result = run_driver_model(profile, matrix, _historicals(), _market(), _assumptions())
+    drivers = pd.DataFrame(result.driver_forecast)
+    income = pd.DataFrame(result.income_statement)
+    funding = pd.DataFrame(result.funding_schedule)
+
+    assert drivers.loc[0, "Blackwell GW Deployed"] == 1
+    assert drivers.loc[2, "Rubin GW Deployed"] == 1
+    assert income.loc[0, "Revenue"] == 0.5 * 1000.0 * 0.80
+    assert funding.loc[0, "Build CAPEX"] == 150.0
+
+
+def test_driver_based_forecast_and_cwb_tables_include_basis():
+    profile = build_business_model_profile("AI Infrastructure / Data Center")
+    matrix = default_driver_matrix(profile, _historicals(), _market(), _assumptions(), years=5)
+    forecast = build_driver_based_forecast("AI Infrastructure / Data Center", matrix, "User Case", _historicals(), _market(), _assumptions())
+    integrated = integrate_driver_valuation("User Case", profile, matrix, _historicals(), _market(), _assumptions())
+    cwb = build_cwb_style_tables(integrated, _market(), integrated.dcf_assumptions)
+
+    assert "Assumption / basis" in forecast.columns
+    assert "Driver Buildout" in cwb
+    assert "Assumption / basis" in cwb["Driver Buildout"].columns

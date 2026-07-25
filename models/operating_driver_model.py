@@ -6,16 +6,28 @@ import math
 import pandas as pd
 
 from models.dcf_model import run_dcf
+from models.driver_templates import AI_INFRA_DRIVER_ROWS, get_driver_template
 
 
 MODEL_TYPES = [
+    "AI Infrastructure / Data Center",
     "Standard Financial",
     "Capacity / Infrastructure",
     "Subscription / SaaS",
+    "SaaS / Software",
+    "Semiconductor",
+    "Marketplace / Platform",
     "Marketplace / Transaction",
+    "Consumer Brand",
+    "Financial / Fintech",
+    "Industrial / Hardware",
+    "Energy / Commodity",
+    "Biotech / Pharma",
+    "Real Estate / REIT",
     "Manufacturing / Unit Volume",
     "Retail / Store",
     "Segment-Based",
+    "General",
     "Custom",
 ]
 
@@ -128,10 +140,12 @@ def _latest_any(historicals: pd.DataFrame | None, columns: list[str], default: f
 def infer_business_model_profile(dataset: dict | None) -> BusinessModelProfile:
     dataset = dataset or {}
     text = " ".join(str(dataset.get(key, "")) for key in ["sector", "industry", "company", "company_description"]).lower()
-    if any(token in text for token in ["data center", "infrastructure", "telecom", "tower", "energy", "utility", "power"]):
+    if any(token in text for token in ["ai infrastructure", "data center", "datacenter", "gpu", "blackwell", "rubin"]):
+        model_type = "AI Infrastructure / Data Center"
+    elif any(token in text for token in ["data center", "infrastructure", "telecom", "tower", "energy", "utility", "power"]):
         model_type = "Capacity / Infrastructure"
     elif any(token in text for token in ["software", "saas", "subscription", "cloud"]):
-        model_type = "Subscription / SaaS"
+        model_type = "SaaS / Software"
     elif any(token in text for token in ["marketplace", "transaction", "payments", "exchange"]):
         model_type = "Marketplace / Transaction"
     elif any(token in text for token in ["manufacturing", "semiconductor", "hardware", "equipment", "production"]):
@@ -145,10 +159,22 @@ def infer_business_model_profile(dataset: dict | None) -> BusinessModelProfile:
 
 def build_business_model_profile(model_type: str = "Standard Financial") -> BusinessModelProfile:
     model_type = model_type if model_type in MODEL_TYPES else "Standard Financial"
+    if model_type == "General":
+        model_type = "Standard Financial"
     capacity_names = {
+        "AI Infrastructure / Data Center": ("Energized GW", "Revenue per GW"),
         "Capacity / Infrastructure": ("Capacity", "Revenue per capacity unit"),
         "Subscription / SaaS": ("Customers", "ARPU"),
+        "SaaS / Software": ("Customers", "ARPU"),
         "Marketplace / Transaction": ("Transaction volume", "Take rate revenue per unit"),
+        "Marketplace / Platform": ("Transaction volume", "Take rate revenue per unit"),
+        "Semiconductor": ("Units shipped", "ASP"),
+        "Consumer Brand": ("Units sold / stores", "ASP / revenue per store"),
+        "Financial / Fintech": ("Assets / accounts", "Yield / fee revenue per unit"),
+        "Industrial / Hardware": ("Production units", "Revenue per unit"),
+        "Energy / Commodity": ("Production volume", "Realized price"),
+        "Biotech / Pharma": ("Probability-weighted pipeline units", "Revenue per unit"),
+        "Real Estate / REIT": ("Properties / sq ft", "Rent per unit"),
         "Manufacturing / Unit Volume": ("Production units", "Revenue per unit"),
         "Retail / Store": ("Stores", "Revenue per store"),
         "Segment-Based": ("Segment units", "Revenue per segment unit"),
@@ -156,7 +182,7 @@ def build_business_model_profile(model_type: str = "Standard Financial") -> Busi
         "Standard Financial": (None, None),
     }
     capacity_unit, revenue_driver = capacity_names[model_type]
-    driver_rows = [
+    driver_rows = AI_INFRA_DRIVER_ROWS if model_type == "AI Infrastructure / Data Center" else [
         "capacity_added",
         "utilization",
         "revenue_per_unit",
@@ -185,12 +211,12 @@ def build_business_model_profile(model_type: str = "Standard Financial") -> Busi
         capacity_unit_name=capacity_unit,
         revenue_driver_name=revenue_driver,
         uses_capacity_model=model_type != "Standard Financial",
-        uses_unit_economics=model_type in {"Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Custom"},
-        uses_customer_model=model_type in {"Subscription / SaaS", "Marketplace / Transaction"},
+        uses_unit_economics=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Custom", "Semiconductor", "Industrial / Hardware", "Energy / Commodity", "Real Estate / REIT"},
+        uses_customer_model=model_type in {"Subscription / SaaS", "SaaS / Software", "Marketplace / Transaction", "Marketplace / Platform", "Financial / Fintech"},
         uses_segment_model=model_type == "Segment-Based",
-        capital_intensive=model_type in {"Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store"},
-        debt_funded=model_type in {"Capacity / Infrastructure", "Energy / Commodity", "Retail / Store"},
-        maintenance_cost_treatment="Capitalized" if model_type in {"Capacity / Infrastructure", "Manufacturing / Unit Volume"} else "Expensed",
+        capital_intensive=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume", "Retail / Store", "Semiconductor", "Industrial / Hardware", "Energy / Commodity", "Real Estate / REIT"},
+        debt_funded=model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Energy / Commodity", "Retail / Store", "Real Estate / REIT"},
+        maintenance_cost_treatment="Capitalized" if model_type in {"AI Infrastructure / Data Center", "Capacity / Infrastructure", "Manufacturing / Unit Volume"} else "Expensed",
         depreciation_method="Vintage-based",
         driver_definitions=DRIVER_DEFINITIONS,
         default_driver_rows=driver_rows,
@@ -221,6 +247,23 @@ DRIVER_DEFINITIONS = {
     "equity_risk_premium": {"label": "Equity Risk Premium", "unit": "%", "category": "WACC", "source": "Market assumption", "confidence": "Medium", "warning": "ERP is a judgment input."},
     "exit_ebitda_multiple": {"label": "Exit EBITDA Multiple", "unit": "x", "category": "Valuation", "source": "Peer multiples", "confidence": "Low", "warning": "Use with caution for capital-intensive firms."},
     "exit_ebit_multiple": {"label": "Exit EBIT Multiple", "unit": "x", "category": "Valuation", "source": "Peer multiples", "confidence": "Low", "warning": "Requires positive meaningful EBIT."},
+    "blackwell_gw_deployed": {"label": "Blackwell GW Deployed", "unit": "gw", "category": "Capacity", "source": "Company buildout / analyst estimate", "confidence": "Low", "warning": "Verify chip availability, power, and energized timing.", "impact": "Blackwell GW -> average GW -> revenue, CAPEX, depreciation, debt, dilution.", "range": "0 to 10 GW; review announced data-center capacity."},
+    "rubin_gw_deployed": {"label": "Rubin GW Deployed", "unit": "gw", "category": "Capacity", "source": "Company buildout / analyst estimate", "confidence": "Low", "warning": "Rubin timing is a high-sensitivity future-capacity assumption.", "impact": "Rubin GW -> average GW -> revenue, CAPEX, depreciation, debt, dilution.", "range": "0 to 10 GW; review roadmap and customer contract evidence."},
+    "other_gw_deployed": {"label": "Other GW Deployed", "unit": "gw", "category": "Capacity", "source": "Existing/other generation capacity", "confidence": "Low", "warning": "Separate legacy capacity from next-generation capacity.", "impact": "Other GW -> revenue and reinvestment base.", "range": "0 to 10 GW."},
+    "revenue_per_blackwell_gw": {"label": "Revenue per Blackwell GW", "unit": "money", "category": "Unit Economics", "source": "Contracts / peer economics / analyst estimate", "confidence": "Low", "warning": "Do not include customer prepayments as current-period revenue.", "impact": "Average Blackwell GW x utilization x revenue/GW -> revenue -> EBITDA -> EBIT -> FCF.", "range": "$0.25B to $5B per GW."},
+    "revenue_per_rubin_gw": {"label": "Revenue per Rubin GW", "unit": "money", "category": "Unit Economics", "source": "Contracts / peer economics / analyst estimate", "confidence": "Low", "warning": "Future Rubin economics require explicit evidence.", "impact": "Average Rubin GW x utilization x revenue/GW -> revenue -> EBITDA -> EBIT -> FCF.", "range": "$0.25B to $6B per GW."},
+    "revenue_per_other_gw": {"label": "Revenue per Other GW", "unit": "money", "category": "Unit Economics", "source": "Existing run-rate / analyst estimate", "confidence": "Low", "warning": "Legacy capacity economics may differ from Blackwell/Rubin.", "impact": "Average other GW x utilization x revenue/GW -> revenue.", "range": "$0.10B to $4B per GW."},
+    "adjusted_ebitda_margin": {"label": "Adjusted EBITDA Margin", "unit": "%", "category": "Margins", "source": "Historical margin / scenario", "confidence": "Medium", "warning": "EBITDA can overstate capital-intensive economics.", "impact": "Revenue x EBITDA margin -> EBITDA -> EBIT -> OCF -> FCF.", "range": "-20% to 80%."},
+    "hardware_cost_per_blackwell_gw": {"label": "Hardware Cost per Blackwell GW", "unit": "money", "category": "Reinvestment / CAPEX", "source": "Supplier/company disclosure / estimate", "confidence": "Low", "warning": "Hardware cost drives CAPEX and depreciation.", "impact": "New Blackwell GW x hardware cost -> growth CAPEX -> debt/dilution and depreciation.", "range": "$0.25B to $5B per GW."},
+    "hardware_cost_per_rubin_gw": {"label": "Hardware Cost per Rubin GW", "unit": "money", "category": "Reinvestment / CAPEX", "source": "Supplier/company disclosure / estimate", "confidence": "Low", "warning": "Future generation costs are uncertain.", "impact": "New Rubin GW x hardware cost -> growth CAPEX -> debt/dilution and depreciation.", "range": "$0.25B to $6B per GW."},
+    "hardware_cost_per_other_gw": {"label": "Hardware Cost per Other GW", "unit": "money", "category": "Reinvestment / CAPEX", "source": "Analyst estimate", "confidence": "Low", "warning": "Legacy/other generation cost may not match latest generation.", "impact": "New other GW x hardware cost -> growth CAPEX and depreciation.", "range": "$0.10B to $4B per GW."},
+    "land_power_cooling_cost_per_blackwell_gw": {"label": "Land / Power / Cooling Cost per Blackwell GW", "unit": "money", "category": "Reinvestment / CAPEX", "source": "Data-center build cost estimate", "confidence": "Low", "warning": "Land is not depreciated; infrastructure is depreciated separately.", "impact": "Infrastructure cost -> growth CAPEX, invested capital, and depreciation.", "range": "$0.10B to $4B per GW."},
+    "land_power_cooling_cost_per_rubin_gw": {"label": "Land / Power / Cooling Cost per Rubin GW", "unit": "money", "category": "Reinvestment / CAPEX", "source": "Data-center build cost estimate", "confidence": "Low", "warning": "Power/cooling availability can constrain ramp.", "impact": "Infrastructure cost -> growth CAPEX, invested capital, and depreciation.", "range": "$0.10B to $4B per GW."},
+    "land_power_cooling_cost_per_other_gw": {"label": "Land / Power / Cooling Cost per Other GW", "unit": "money", "category": "Reinvestment / CAPEX", "source": "Data-center build cost estimate", "confidence": "Low", "warning": "Separate site infrastructure from GPU hardware.", "impact": "Infrastructure cost -> growth CAPEX and depreciation.", "range": "$0.10B to $3B per GW."},
+    "gpu_useful_life": {"label": "GPU / Hardware Useful Life", "unit": "years", "category": "Depreciation", "source": "Accounting policy / peer disclosure", "confidence": "Low", "warning": "Shorter useful life lowers EBIT and ROIC.", "impact": "Hardware cost / useful life -> depreciation -> EBIT and NOPAT.", "range": "3 to 7 years."},
+    "maintenance_capex_pct_revenue": {"label": "Maintenance CAPEX % Revenue", "unit": "%", "category": "Reinvestment / CAPEX", "source": "Analyst estimate / accounting policy", "confidence": "Low", "warning": "Maintenance CAPEX must not be confused with growth CAPEX.", "impact": "Revenue x maintenance CAPEX % -> FCF and invested capital.", "range": "0% to 20%."},
+    "tax_rate": {"label": "Tax Rate", "unit": "%", "category": "Margins", "source": "Normalized tax assumption", "confidence": "Medium", "warning": "Tax-loss treatment is not modeled unless explicit.", "impact": "EBIT x (1 - tax rate) -> NOPAT.", "range": "0% to 35%."},
+    "earnings_multiple": {"label": "Earnings Multiple", "unit": "x", "category": "Valuation", "source": "Peer multiples", "confidence": "Low", "warning": "Requires positive normalized net income.", "impact": "Target-year earnings x multiple -> equity value.", "range": "5x to 50x."},
 }
 
 
@@ -234,6 +277,7 @@ def default_driver_matrix(profile: BusinessModelProfile, historicals: pd.DataFra
     latest_capacity = 1.0
     revenue_per_unit = latest_revenue / latest_capacity if latest_capacity else latest_revenue
     price = _num(market.get("price"), 1.0) or 1.0
+    template_defaults = get_driver_template(profile.model_type).get("default_driver_assumptions", {})
     defaults = {
         "capacity_added": 0.10 if profile.uses_capacity_model else 0.0,
         "utilization": 0.75,
@@ -257,7 +301,25 @@ def default_driver_matrix(profile: BusinessModelProfile, historicals: pd.DataFra
         "equity_risk_premium": 0.055,
         "exit_ebitda_multiple": max(_num(assumptions.get("terminal_multiple"), 12.0), 1.0),
         "exit_ebit_multiple": max(_num(assumptions.get("terminal_multiple"), 12.0), 1.0),
+        "blackwell_gw_deployed": 0.0,
+        "rubin_gw_deployed": 0.0,
+        "other_gw_deployed": 0.10,
+        "revenue_per_blackwell_gw": max(latest_revenue, 1.0),
+        "revenue_per_rubin_gw": max(latest_revenue * 1.15, 1.0),
+        "revenue_per_other_gw": max(latest_revenue * 0.75, 1.0),
+        "adjusted_ebitda_margin": max(_num(assumptions.get("ocf_margin"), 0.25), _num(assumptions.get("nopat_margin"), 0.12)),
+        "hardware_cost_per_blackwell_gw": max(latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.04) * 4, 1.0),
+        "hardware_cost_per_rubin_gw": max(latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.04) * 4.5, 1.0),
+        "hardware_cost_per_other_gw": max(latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.04) * 3, 1.0),
+        "land_power_cooling_cost_per_blackwell_gw": max(latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.04) * 2, 0.0),
+        "land_power_cooling_cost_per_rubin_gw": max(latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.04) * 2.2, 0.0),
+        "land_power_cooling_cost_per_other_gw": max(latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.04) * 1.5, 0.0),
+        "gpu_useful_life": 5.0,
+        "maintenance_capex_pct_revenue": _num(assumptions.get("maintenance_capex_pct_revenue"), 0.03),
+        "tax_rate": _num(assumptions.get("tax_rate"), 0.21),
+        "earnings_multiple": 25.0,
     }
+    defaults.update({key: value for key, value in template_defaults.items() if key not in {"equity_issue_price", "beta"}})
     rows = []
     for key in profile.default_driver_rows:
         definition = DRIVER_DEFINITIONS[key]
@@ -270,10 +332,22 @@ def default_driver_matrix(profile: BusinessModelProfile, historicals: pd.DataFra
             "Evidence Grade": "Estimated",
             "Confidence": definition["confidence"],
             "Warning": definition["warning"],
+            "Model Impact": definition.get("impact") or definition["warning"],
+            "Reasonable Range": definition.get("range") or "Review history, peers, filings, and management guidance.",
+            "User Note": "",
             "Historical / LTM": defaults[key],
         }
         for idx, label in enumerate(labels, start=1):
-            row[label] = defaults[key] if key != "capacity_added" else defaults[key] * idx
+            if key == "capacity_added":
+                row[label] = defaults[key] * idx
+            elif key == "blackwell_gw_deployed":
+                row[label] = max(defaults[key], 0.15 * idx)
+            elif key == "rubin_gw_deployed":
+                row[label] = max(defaults[key], 0.0 if idx < 3 else 0.20 * (idx - 2))
+            elif key == "other_gw_deployed":
+                row[label] = defaults[key] + 0.05 * idx
+            else:
+                row[label] = defaults[key]
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -304,6 +378,280 @@ def _depreciation_for_vintages(vintages: list[dict], period_index: int, capex_ke
     return total
 
 
+def _matrix_value(matrix: pd.DataFrame | None, row_key: str, column: str, default: float = 0.0) -> float:
+    if matrix is None or matrix.empty or "row_key" not in matrix or column not in matrix:
+        return default
+    match = matrix[matrix["row_key"] == row_key]
+    if match.empty:
+        return default
+    return _num(match.iloc[0].get(column), default)
+
+
+def _run_ai_infrastructure_driver_model(
+    profile: BusinessModelProfile,
+    driver_matrix: pd.DataFrame,
+    historicals: pd.DataFrame | None,
+    market: dict,
+    assumptions: dict,
+    *,
+    years: int = 5,
+) -> DriverModelResult:
+    labels = period_labels(years)
+    inputs = matrix_to_driver_inputs(driver_matrix, years)
+    beginning_debt = max(_num(market.get("debt"), _latest(historicals, "Net Debt")), 0.0)
+    beginning_cash = _num(market.get("cash"), 0.0)
+    beginning_shares = _num(assumptions.get("diluted_shares"), _latest(historicals, "Diluted Shares", _num(market.get("shares_outstanding"))))
+    latest_revenue = _latest_positive(historicals, "Revenue", 0.0)
+    prior_revenue = latest_revenue
+    tax_rate_default = _num(assumptions.get("tax_rate"), 0.21)
+    working_capital_pct = _num(assumptions.get("working_capital_pct_revenue"), 0.01)
+    invested_capital = max(latest_revenue * 0.75, 1.0)
+    bw_prior = _matrix_value(driver_matrix, "blackwell_gw_deployed", "Historical / LTM", 0.0)
+    rubin_prior = _matrix_value(driver_matrix, "rubin_gw_deployed", "Historical / LTM", 0.0)
+    other_prior = _matrix_value(driver_matrix, "other_gw_deployed", "Historical / LTM", 0.0)
+    utilization_ltm = _matrix_value(driver_matrix, "utilization", "Historical / LTM", 0.70)
+    revenue_per_gw_ltm = latest_revenue / max((bw_prior + rubin_prior + other_prior) * utilization_ltm, 1.0)
+    latest_ebitda = _latest_any(historicals, ["Adjusted EBITDA", "EBITDA"], latest_revenue * _num(assumptions.get("ocf_margin"), 0.20))
+    latest_depreciation = _latest_any(historicals, ["D&A", "Depreciation", "Depreciation & Amortization"], latest_revenue * _num(assumptions.get("depreciation_amortization_pct_revenue"), 0.03))
+    latest_ebit = _latest_any(historicals, ["EBIT", "Operating Income"], latest_ebitda - latest_depreciation)
+    latest_interest = beginning_debt * _num(assumptions.get("pretax_cost_of_debt"), 0.06)
+    latest_nopat = latest_ebit * (1 - tax_rate_default) if latest_ebit >= 0 else latest_ebit
+    latest_ocf = _latest_any(historicals, ["OCF", "Operating Cash Flow"], latest_revenue * _num(assumptions.get("ocf_margin"), 0.0))
+    latest_growth_capex = abs(_latest_any(historicals, ["Growth CAPEX", "Total CAPEX"], latest_revenue * _num(assumptions.get("growth_capex_pct_revenue"), 0.0)))
+    latest_maintenance_capex = latest_revenue * _num(assumptions.get("maintenance_capex_pct_revenue"), 0.03)
+    latest_total_capex = latest_growth_capex + latest_maintenance_capex
+    market_equity_ltm = _num(market.get("market_cap"), _num(market.get("price")) * max(beginning_shares, 0.0))
+    equity_weight_ltm = market_equity_ltm / max(market_equity_ltm + beginning_debt, 1.0)
+    cost_of_debt_ltm = _num(assumptions.get("pretax_cost_of_debt"), 0.06)
+    cost_of_equity_ltm = 0.04 + (_num(market.get("beta"), 1.4) or 1.4) * 0.055
+    wacc_ltm = _num(assumptions.get("wacc"), equity_weight_ltm * cost_of_equity_ltm + (1 - equity_weight_ltm) * cost_of_debt_ltm * (1 - tax_rate_default))
+    roic_ltm = latest_nopat / invested_capital if invested_capital else None
+    historical_ltm = {
+        "Blackwell GW Deployed": bw_prior,
+        "Rubin GW Deployed": rubin_prior,
+        "Other GW Deployed": other_prior,
+        "Total Energized GW": bw_prior + rubin_prior + other_prior,
+        "Average Blackwell GW": bw_prior,
+        "Average Rubin GW": rubin_prior,
+        "Average Total GW": bw_prior + rubin_prior + other_prior,
+        "Ending Capacity": bw_prior + rubin_prior + other_prior,
+        "Average Capacity": bw_prior + rubin_prior + other_prior,
+        "Utilization": utilization_ltm,
+        "Revenue per Unit": revenue_per_gw_ltm,
+        "Revenue per Blackwell GW": _matrix_value(driver_matrix, "revenue_per_blackwell_gw", "Historical / LTM", revenue_per_gw_ltm),
+        "Revenue per Rubin GW": _matrix_value(driver_matrix, "revenue_per_rubin_gw", "Historical / LTM", revenue_per_gw_ltm),
+        "Revenue": latest_revenue,
+        "Revenue Growth": _num(assumptions.get("revenue_cagr"), 0.0),
+        "Adjusted EBITDA": latest_ebitda,
+        "EBITDA Margin": latest_ebitda / latest_revenue if latest_revenue else None,
+        "Hardware Depreciation": latest_depreciation,
+        "Infrastructure Depreciation": 0.0,
+        "Depreciation": latest_depreciation,
+        "EBIT": latest_ebit,
+        "EBIT Margin": latest_ebit / latest_revenue if latest_revenue else None,
+        "Interest Expense": latest_interest,
+        "Tax Expense": max(latest_ebit - latest_interest, 0.0) * tax_rate_default,
+        "Net Income": latest_ebit - latest_interest - max(latest_ebit - latest_interest, 0.0) * tax_rate_default,
+        "NOPAT": latest_nopat,
+        "Operating Cash Flow": latest_ocf,
+        "Build CAPEX": latest_growth_capex,
+        "Growth CAPEX": latest_growth_capex,
+        "Capitalized Maintenance CAPEX": latest_maintenance_capex,
+        "Maintenance CAPEX": latest_maintenance_capex,
+        "Total CAPEX": latest_total_capex,
+        "Free Cash Flow Before Financing": latest_ocf - latest_total_capex,
+        "Customer Prepayments": 0.0,
+        "Equity Raised": 0.0,
+        "Debt Drawn": 0.0,
+        "Ending Debt": beginning_debt,
+        "Ending Net Debt": beginning_debt - beginning_cash,
+        "Diluted Shares": beginning_shares,
+        "Cumulative Dilution": 0.0,
+        "Average Invested Capital": invested_capital,
+        "ROIC": roic_ltm,
+        "WACC": wacc_ltm,
+        "ROIC Spread": roic_ltm - wacc_ltm if roic_ltm is not None else None,
+    }
+    rows = []
+    warnings = []
+    debt = beginning_debt
+    cash = beginning_cash
+    shares = beginning_shares
+    for idx, label in enumerate(labels, start=1):
+        values = inputs.get(label, {})
+        bw = max(_num(values.get("blackwell_gw_deployed"), bw_prior), 0.0)
+        rubin = max(_num(values.get("rubin_gw_deployed"), rubin_prior), 0.0)
+        other = max(_num(values.get("other_gw_deployed"), other_prior), 0.0)
+        avg_bw = (bw_prior + bw) / 2
+        avg_rubin = (rubin_prior + rubin) / 2
+        avg_other = (other_prior + other) / 2
+        total_gw = bw + rubin + other
+        avg_total = avg_bw + avg_rubin + avg_other
+        new_bw = max(bw - bw_prior, 0.0)
+        new_rubin = max(rubin - rubin_prior, 0.0)
+        new_other = max(other - other_prior, 0.0)
+        utilization = min(max(_num(values.get("utilization"), 0.70), 0.0), 1.5)
+        if utilization > 1.0:
+            warnings.append(f"{label}: utilization exceeds 100%.")
+        rev_bw = _num(values.get("revenue_per_blackwell_gw"), revenue_per_gw_ltm)
+        rev_rubin = _num(values.get("revenue_per_rubin_gw"), revenue_per_gw_ltm)
+        rev_other = _num(values.get("revenue_per_other_gw"), revenue_per_gw_ltm)
+        revenue = (avg_bw * rev_bw + avg_rubin * rev_rubin + avg_other * rev_other) * utilization
+        ebitda_margin = _num(values.get("adjusted_ebitda_margin"), _num(assumptions.get("ocf_margin"), 0.25))
+        ebitda = revenue * ebitda_margin
+        hw_bw = _num(values.get("hardware_cost_per_blackwell_gw"))
+        hw_rubin = _num(values.get("hardware_cost_per_rubin_gw"))
+        hw_other = _num(values.get("hardware_cost_per_other_gw"))
+        infra_bw = _num(values.get("land_power_cooling_cost_per_blackwell_gw"))
+        infra_rubin = _num(values.get("land_power_cooling_cost_per_rubin_gw"))
+        infra_other = _num(values.get("land_power_cooling_cost_per_other_gw"))
+        gpu_life = max(_num(values.get("gpu_useful_life"), 5.0), 1.0)
+        infra_life = max(_num(values.get("infrastructure_useful_life"), 15.0), 1.0)
+        hardware_depr = (avg_bw * hw_bw + avg_rubin * hw_rubin + avg_other * hw_other) / gpu_life
+        infra_depr = (avg_bw * infra_bw + avg_rubin * infra_rubin + avg_other * infra_other) / infra_life
+        depreciation = hardware_depr + infra_depr
+        ebit = ebitda - depreciation
+        tax_rate = _num(values.get("tax_rate"), tax_rate_default)
+        nopat = ebit * (1 - tax_rate) if ebit >= 0 else ebit
+        growth_capex = new_bw * (hw_bw + infra_bw) + new_rubin * (hw_rubin + infra_rubin) + new_other * (hw_other + infra_other)
+        maintenance_capex = revenue * _num(values.get("maintenance_capex_pct_revenue"), _num(assumptions.get("maintenance_capex_pct_revenue"), 0.03))
+        total_capex = growth_capex + maintenance_capex
+        customer_prepayments = growth_capex * _num(values.get("customer_prepayment_pct"), 0.0)
+        equity_raised = growth_capex * _num(values.get("equity_funding_pct"), 0.0)
+        change_wc = revenue * working_capital_pct
+        cash_taxes = max(ebit, 0.0) * tax_rate
+        pre_interest_ocf = ebitda + customer_prepayments - cash_taxes - change_wc
+        pre_interest_fcf = pre_interest_ocf - total_capex
+        funding_gap = max(-pre_interest_fcf, 0.0)
+        debt_drawn = max(funding_gap - equity_raised, 0.0)
+        debt_repaid = min(max(pre_interest_fcf, 0.0) * 0.25, debt)
+        ending_debt = debt + debt_drawn - debt_repaid
+        average_debt = (debt + ending_debt) / 2
+        cost_of_debt = _num(values.get("cost_of_debt"), 0.08)
+        interest_expense = average_debt * cost_of_debt
+        pretax_income = ebit - interest_expense
+        tax_expense = max(pretax_income, 0.0) * tax_rate
+        net_income = pretax_income - tax_expense
+        operating_cash_flow = pre_interest_ocf - interest_expense
+        fcf = operating_cash_flow - total_capex
+        issue_price = max(_num(values.get("equity_issue_price"), _num(market.get("price"), 1.0)), 0.01)
+        new_shares = equity_raised / issue_price
+        sbc_shares = shares * _num(values.get("sbc_dilution_pct"), 0.0)
+        repurchases = min(_num(values.get("share_repurchases"), 0.0), shares + new_shares + sbc_shares)
+        ending_shares = shares + new_shares + sbc_shares - repurchases
+        ending_cash = cash + fcf + equity_raised + debt_drawn - debt_repaid
+        ending_net_debt = ending_debt - ending_cash
+        ending_invested_capital = invested_capital + growth_capex + maintenance_capex - depreciation
+        average_invested_capital = (invested_capital + ending_invested_capital) / 2
+        market_equity = _num(market.get("market_cap"), _num(market.get("price")) * max(shares, 0.0))
+        equity_weight = market_equity / max(market_equity + average_debt, 1.0)
+        debt_weight = 1 - equity_weight
+        cost_of_equity = _num(values.get("risk_free_rate"), 0.04) + _num(values.get("beta"), 1.4) * _num(values.get("equity_risk_premium"), 0.055)
+        after_tax_cost_of_debt = cost_of_debt * (1 - tax_rate)
+        wacc = equity_weight * cost_of_equity + debt_weight * after_tax_cost_of_debt
+        roic = nopat / average_invested_capital if average_invested_capital else None
+        row = {
+            "Period": label,
+            "Blackwell GW Deployed": bw,
+            "Rubin GW Deployed": rubin,
+            "Other GW Deployed": other,
+            "Total Energized GW": total_gw,
+            "Average Blackwell GW": avg_bw,
+            "Average Rubin GW": avg_rubin,
+            "Average Other GW": avg_other,
+            "Average Total GW": avg_total,
+            "Beginning Capacity": bw_prior + rubin_prior + other_prior,
+            "Ending Capacity": total_gw,
+            "Average Capacity": avg_total,
+            "Utilization": utilization,
+            "Revenue per Unit": revenue / max(avg_total * utilization, 1.0),
+            "Revenue per Blackwell GW": rev_bw,
+            "Revenue per Rubin GW": rev_rubin,
+            "Revenue per Other GW": rev_other,
+            "Hardware Cost per Blackwell GW": hw_bw,
+            "Hardware Cost per Rubin GW": hw_rubin,
+            "Hardware Cost per Other GW": hw_other,
+            "Land / Power / Cooling Cost per Blackwell GW": infra_bw,
+            "Land / Power / Cooling Cost per Rubin GW": infra_rubin,
+            "Land / Power / Cooling Cost per Other GW": infra_other,
+            "Total Build Cost per Blackwell GW": hw_bw + infra_bw,
+            "Total Build Cost per Rubin GW": hw_rubin + infra_rubin,
+            "Revenue": revenue,
+            "Revenue Growth": revenue / prior_revenue - 1 if prior_revenue else None,
+            "Adjusted EBITDA": ebitda,
+            "EBITDA Margin": ebitda_margin,
+            "Maintenance Operating Expense": 0.0,
+            "Hardware Depreciation": hardware_depr,
+            "Infrastructure Depreciation": infra_depr,
+            "Depreciation": depreciation,
+            "EBIT": ebit,
+            "EBIT Margin": ebit / revenue if revenue else None,
+            "Interest Expense": interest_expense,
+            "Pretax Income": pretax_income,
+            "Tax Expense": tax_expense,
+            "Net Income": net_income,
+            "NOPAT": nopat,
+            "Operating Cash Flow": operating_cash_flow,
+            "Operating Cash Flow Margin": operating_cash_flow / revenue if revenue else None,
+            "Build CAPEX": growth_capex,
+            "Growth CAPEX": growth_capex,
+            "Capitalized Maintenance CAPEX": maintenance_capex,
+            "Maintenance CAPEX": maintenance_capex,
+            "Total CAPEX": total_capex,
+            "Free Cash Flow Before Financing": fcf,
+            "Customer Prepayments": customer_prepayments,
+            "Government Grants / Subsidies": 0.0,
+            "Equity Raised": equity_raised,
+            "Debt Drawn": debt_drawn,
+            "Debt Repaid": debt_repaid,
+            "Ending Cash": ending_cash,
+            "Beginning Debt": debt,
+            "Ending Debt": ending_debt,
+            "Average Debt": average_debt,
+            "Ending Net Debt": ending_net_debt,
+            "New Shares Issued": new_shares,
+            "SBC Shares": sbc_shares,
+            "Share Repurchases": repurchases,
+            "Diluted Shares": ending_shares,
+            "Cumulative Dilution": ending_shares / beginning_shares - 1 if beginning_shares else None,
+            "Invested Capital": ending_invested_capital,
+            "Average Invested Capital": average_invested_capital,
+            "ROIC": roic,
+            "Risk-Free Rate": _num(values.get("risk_free_rate"), 0.04),
+            "Beta": _num(values.get("beta"), 1.4),
+            "Equity Risk Premium": _num(values.get("equity_risk_premium"), 0.055),
+            "Cost of Equity": cost_of_equity,
+            "Pretax Cost of Debt": cost_of_debt,
+            "After-Tax Cost of Debt": after_tax_cost_of_debt,
+            "Market Value of Equity": market_equity,
+            "Market Value of Debt": average_debt,
+            "Equity Weight": equity_weight,
+            "Debt Weight": debt_weight,
+            "WACC": wacc,
+            "ROIC Spread": roic - wacc if roic is not None else None,
+            "Economic Profit": nopat - wacc * average_invested_capital if roic is not None else None,
+        }
+        rows.append(row)
+        bw_prior, rubin_prior, other_prior = bw, rubin, other
+        prior_revenue = revenue
+        debt, cash, shares, invested_capital = ending_debt, ending_cash, ending_shares, ending_invested_capital
+    table = pd.DataFrame(rows)
+    return DriverModelResult(
+        driver_forecast=table[["Period", "Blackwell GW Deployed", "Rubin GW Deployed", "Other GW Deployed", "Total Energized GW", "Average Blackwell GW", "Average Rubin GW", "Average Other GW", "Average Total GW", "Beginning Capacity", "Ending Capacity", "Average Capacity", "Utilization", "Revenue per Unit", "Revenue per Blackwell GW", "Revenue per Rubin GW", "Revenue per Other GW", "Hardware Cost per Blackwell GW", "Hardware Cost per Rubin GW", "Hardware Cost per Other GW", "Land / Power / Cooling Cost per Blackwell GW", "Land / Power / Cooling Cost per Rubin GW", "Land / Power / Cooling Cost per Other GW", "Total Build Cost per Blackwell GW", "Total Build Cost per Rubin GW"]].to_dict("list"),
+        revenue_forecast=table[["Period", "Revenue", "Revenue Growth"]].to_dict("list"),
+        income_statement=table[["Period", "Revenue", "Adjusted EBITDA", "EBITDA Margin", "Maintenance Operating Expense", "Hardware Depreciation", "Infrastructure Depreciation", "Depreciation", "EBIT", "EBIT Margin", "Interest Expense", "Pretax Income", "Tax Expense", "Net Income", "NOPAT"]].to_dict("list"),
+        cash_flow=table[["Period", "Adjusted EBITDA", "Maintenance Operating Expense", "Interest Expense", "Tax Expense", "Operating Cash Flow", "Operating Cash Flow Margin", "Build CAPEX", "Growth CAPEX", "Capitalized Maintenance CAPEX", "Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing"]].to_dict("list"),
+        funding_schedule=table[["Period", "Build CAPEX", "Growth CAPEX", "Capitalized Maintenance CAPEX", "Maintenance CAPEX", "Total CAPEX", "Free Cash Flow Before Financing", "Customer Prepayments", "Government Grants / Subsidies", "Equity Raised", "Debt Drawn", "Debt Repaid", "Ending Cash", "Ending Debt", "Ending Net Debt"]].to_dict("list"),
+        debt_schedule=table[["Period", "Beginning Debt", "Debt Drawn", "Debt Repaid", "Ending Debt", "Average Debt", "Interest Expense"]].to_dict("list"),
+        share_schedule=table[["Period", "New Shares Issued", "SBC Shares", "Share Repurchases", "Diluted Shares", "Cumulative Dilution"]].to_dict("list"),
+        depreciation_schedule=table[["Period", "Hardware Depreciation", "Infrastructure Depreciation", "Depreciation"]].to_dict("list"),
+        invested_capital_schedule=table[["Period", "Invested Capital", "Average Invested Capital", "Build CAPEX", "Capitalized Maintenance CAPEX"]].to_dict("list"),
+        roic_schedule=table[["Period", "NOPAT", "Average Invested Capital", "ROIC", "Risk-Free Rate", "Beta", "Equity Risk Premium", "Cost of Equity", "Pretax Cost of Debt", "After-Tax Cost of Debt", "Market Value of Equity", "Market Value of Debt", "Equity Weight", "Debt Weight", "WACC", "ROIC Spread", "Economic Profit"]].to_dict("list"),
+        warnings=warnings,
+        historical_ltm=historical_ltm,
+    )
+
+
 def run_driver_model(
     profile: BusinessModelProfile,
     driver_matrix: pd.DataFrame,
@@ -315,6 +663,8 @@ def run_driver_model(
     maintenance_treatment: str | None = None,
     capitalized_maintenance_pct: float = 1.0,
 ) -> DriverModelResult:
+    if profile.model_type == "AI Infrastructure / Data Center":
+        return _run_ai_infrastructure_driver_model(profile, driver_matrix, historicals, market, assumptions, years=years)
     labels = period_labels(years)
     inputs = matrix_to_driver_inputs(driver_matrix, years)
     treatment = maintenance_treatment or profile.maintenance_cost_treatment or "Capitalized"
@@ -360,8 +710,8 @@ def run_driver_model(
     roic_ltm = latest_nopat / invested_capital_begin if invested_capital_begin else None
     historical_ltm = {
         "Ending Capacity": 1.0,
-        "Utilization": _num(driver_matrix.loc[driver_matrix["row_key"] == "utilization", "Historical / LTM"].iloc[0], 0.75) if driver_matrix is not None and not driver_matrix.empty and "Historical / LTM" in driver_matrix else 0.75,
-        "Revenue per Unit": _num(driver_matrix.loc[driver_matrix["row_key"] == "revenue_per_unit", "Historical / LTM"].iloc[0], latest_revenue) if driver_matrix is not None and not driver_matrix.empty and "Historical / LTM" in driver_matrix else latest_revenue,
+        "Utilization": _matrix_value(driver_matrix, "utilization", "Historical / LTM", 0.75),
+        "Revenue per Unit": _matrix_value(driver_matrix, "revenue_per_unit", "Historical / LTM", latest_revenue),
         "Revenue": latest_revenue,
         "Revenue Growth": _num(assumptions.get("revenue_cagr"), 0.0),
         "Adjusted EBITDA": latest_ebitda,
@@ -592,6 +942,45 @@ def driver_result_table(result: DriverModelResult) -> pd.DataFrame:
         return pd.DataFrame()
     periods = source["Period"].tolist()
     rows = []
+    basis = {
+        "Blackwell GW Deployed": "Ending Blackwell GW by period; user should verify chip supply, power, and energized timing.",
+        "Rubin GW Deployed": "Ending Rubin GW by period; future generation timing should be evidence-checked.",
+        "Other GW Deployed": "Ending legacy/other GW by period.",
+        "Total Energized GW": "Blackwell + Rubin + Other deployed GW.",
+        "Average Blackwell GW": "Average GW = (beginning + ending) / 2.",
+        "Average Rubin GW": "Average GW = (beginning + ending) / 2.",
+        "Average Total GW": "Average Blackwell + Rubin + Other GW.",
+        "Capacity / Units": "Ending operating units or capacity.",
+        "Utilization %": "Utilization converts deployed capacity into revenue-producing capacity.",
+        "Revenue per Unit": "Revenue = average capacity x utilization x revenue per unit.",
+        "Revenue per Blackwell GW": "Blackwell revenue = average Blackwell GW x utilization x revenue/GW.",
+        "Revenue per Rubin GW": "Rubin revenue = average Rubin GW x utilization x revenue/GW.",
+        "Revenue": "Driver output that feeds the DCF revenue forecast.",
+        "Adjusted EBITDA": "Revenue x adjusted EBITDA margin.",
+        "EBITDA Margin %": "Adjusted EBITDA / revenue.",
+        "Maintenance Expense": "Operating maintenance expense when expensed rather than capitalized.",
+        "Depreciation": "Hardware and infrastructure depreciation burden.",
+        "EBIT": "EBITDA - maintenance expense - depreciation.",
+        "EBIT Margin %": "EBIT / revenue.",
+        "Interest Expense": "Average debt x cost of debt.",
+        "Net Income": "Pretax income - tax expense.",
+        "NOPAT": "EBIT x (1 - normalized tax rate); negative EBIT remains negative.",
+        "Operating Cash Flow": "EBITDA + prepayments - cash interest - cash taxes - working capital.",
+        "Build CAPEX": "Growth CAPEX required by capacity additions.",
+        "Maintenance CAPEX": "Capitalized maintenance reinvestment.",
+        "Total CAPEX": "Growth CAPEX + maintenance CAPEX.",
+        "Free Cash Flow": "Operating cash flow - total CAPEX.",
+        "Customer Prepayments": "Customer financing support; not counted as current-period revenue.",
+        "Equity Raised": "Equity funding % x growth CAPEX.",
+        "Debt Drawn": "Residual funding need after OCF, prepayments, and equity funding.",
+        "Ending Debt": "Debt schedule after draws and repayments.",
+        "Ending Net Debt": "Ending debt less ending cash.",
+        "Diluted Shares": "Beginning shares + new shares + SBC - repurchases.",
+        "Invested Capital": "Average invested operating capital used for ROIC.",
+        "ROIC %": "NOPAT / average invested capital.",
+        "WACC %": "Risk-free + beta/ERP blended with after-tax cost of debt.",
+        "ROIC Spread %": "ROIC minus WACC.",
+    }
 
     def add(section: str, label: str, frame: pd.DataFrame, column: str):
         row = {"Section": section, "Line Item": label}
@@ -599,14 +988,30 @@ def driver_result_table(result: DriverModelResult) -> pd.DataFrame:
         for period in periods:
             match = frame[frame["Period"] == period]
             row[period] = match.iloc[0].get(column) if not match.empty and column in match else None
+        row["Assumption / basis"] = basis.get(label, "Calculated from the selected business-driver scenario.")
         rows.append(row)
 
-    for label, column in [
-        ("Capacity / Units", "Ending Capacity"),
-        ("Utilization %", "Utilization"),
-        ("Revenue per Unit", "Revenue per Unit"),
-    ]:
-        add("Operating Drivers", label, drivers, column)
+    if "Blackwell GW Deployed" in drivers.columns:
+        for label, column in [
+            ("Blackwell GW Deployed", "Blackwell GW Deployed"),
+            ("Rubin GW Deployed", "Rubin GW Deployed"),
+            ("Other GW Deployed", "Other GW Deployed"),
+            ("Total Energized GW", "Total Energized GW"),
+            ("Average Blackwell GW", "Average Blackwell GW"),
+            ("Average Rubin GW", "Average Rubin GW"),
+            ("Average Total GW", "Average Total GW"),
+            ("Utilization %", "Utilization"),
+            ("Revenue per Blackwell GW", "Revenue per Blackwell GW"),
+            ("Revenue per Rubin GW", "Revenue per Rubin GW"),
+        ]:
+            add("Operating Drivers", label, drivers, column)
+    else:
+        for label, column in [
+            ("Capacity / Units", "Ending Capacity"),
+            ("Utilization %", "Utilization"),
+            ("Revenue per Unit", "Revenue per Unit"),
+        ]:
+            add("Operating Drivers", label, drivers, column)
     for label, column in [
         ("Revenue", "Revenue"),
         ("Adjusted EBITDA", "Adjusted EBITDA"),
@@ -624,9 +1029,11 @@ def driver_result_table(result: DriverModelResult) -> pd.DataFrame:
         ("Operating Cash Flow", "Operating Cash Flow"),
         ("Build CAPEX", "Build CAPEX"),
         ("Maintenance CAPEX", "Capitalized Maintenance CAPEX"),
+        ("Total CAPEX", "Total CAPEX"),
         ("Free Cash Flow", "Free Cash Flow Before Financing"),
     ]:
-        add("Cash Flow", label, cash, column)
+        if column in cash.columns:
+            add("Cash Flow", label, cash, column)
     for label, column in [
         ("Customer Prepayments", "Customer Prepayments"),
         ("Equity Raised", "Equity Raised"),
