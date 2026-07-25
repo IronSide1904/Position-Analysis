@@ -6354,68 +6354,6 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
         _sources_data_quality_tab(ctx, analyst_details)
 
 
-def _render_mr1_lite(ctx: dict, analyst_details: bool) -> None:
-    dataset = ctx["dataset"]
-    market = dataset.get("market_data", {})
-    swing, swing_subtitle, swing_status = _swing_view(ctx)
-    regime, regime_subtitle, regime_status = _market_regime(ctx)
-    volume, volume_subtitle, volume_status = _volume_context(ctx)
-    vol, vol_subtitle, vol_status = _swing_volatility(ctx)
-    confidence, confidence_subtitle, confidence_status = _data_confidence(ctx)
-    render_cockpit_header(
-        f"{dataset.get('ticker')} MR-1 Lite",
-        "Market regime, volume, relative context, volatility, and suggested swing exposure. This is separate from the PA-11R investment view.",
-        "MR-1 Lite Trading Cockpit",
-    )
-    tabs = st.tabs(["Snapshot", "Trading Setup", "Regime & Relative Context", "Volume & Volatility", "Sources & Data Quality"])
-    with tabs[0]:
-        render_status_grid(
-            [
-                {"title": "Swing View", "value": swing, "subtitle": swing_subtitle, "status": swing_status},
-                {"title": "Market Regime", "value": regime, "subtitle": regime_subtitle, "status": regime_status},
-                {"title": "Suggested Exposure", "value": "Starter / Reduced" if swing_status != "supportive" else "Normal Swing", "subtitle": "Exposure is based on setup quality and data confidence.", "status": swing_status},
-                {"title": "Volume Context", "value": volume, "subtitle": volume_subtitle, "status": volume_status},
-                {"title": "Relative Context", "value": "Supportive" if (market.get("sma20") or 0) > 0 else "Neutral", "subtitle": f"SMA20 {fmt_percent(market.get('sma20'))}; SMA50 {fmt_percent(market.get('sma50'))}.", "status": "supportive" if (market.get("sma20") or 0) > 0 else "neutral"},
-                {"title": "Data Confidence", "value": confidence, "subtitle": confidence_subtitle, "status": confidence_status},
-            ]
-        )
-        render_decision_summary(
-            {
-                "what_matters": [f"Swing view is {swing}.", f"Market regime is {regime}.", f"Volume context is {volume}."],
-                "supporting": [swing_subtitle, regime_subtitle],
-                "contradicting": [volume_subtitle if volume_status in {"warning", "negative"} else vol_subtitle],
-                "manual_review": [confidence_subtitle],
-                "next_action": "Trade only when price action, volume, and regime align; otherwise wait or use reduced exposure.",
-            }
-        )
-    with tabs[1]:
-        render_section("Trading Setup", "Price action and exposure controls for swing decisions.", "MR-1")
-        render_status_grid(
-            [
-                {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Latest provider price.", "status": "info"},
-                {"title": "Change", "value": fmt_percent(market.get("change")), "subtitle": "Current session / provider change.", "status": "supportive" if (market.get("change") or 0) > 0 else "warning"},
-                {"title": "ATR", "value": fmt_ratio(market.get("atr")), "subtitle": "Volatility sizing input.", "status": "neutral"},
-                {"title": "Beta", "value": fmt_ratio(market.get("beta")), "subtitle": "Market sensitivity.", "status": "warning" if (market.get("beta") or 0) > 1.25 else "neutral"},
-            ],
-            numeric=True,
-        )
-        st.plotly_chart(price_action_chart(dataset.get("price_history")), width="stretch", key="mr1_price")
-    with tabs[2]:
-        render_section("Regime & Relative Context", "Use trend and benchmark-like fields to avoid fighting the tape.", "MR-1")
-        show_table(_finviz_decision_snapshot(market), "No relative context available.")
-    with tabs[3]:
-        render_section("Volume & Volatility", "Volume confirms or contradicts the move; volatility controls position size.", "MR-1")
-        render_status_grid(
-            [
-                {"title": "Volume Context", "value": volume, "subtitle": volume_subtitle, "status": volume_status},
-                {"title": "Swing Volatility", "value": vol, "subtitle": vol_subtitle, "status": vol_status},
-                {"title": "Short Float", "value": fmt_percent(market.get("short_float")), "subtitle": "High short interest can increase volatility.", "status": "warning" if (market.get("short_float") or 0) > 0.15 else "neutral"},
-            ]
-        )
-    with tabs[4]:
-        _sources_data_quality_tab(ctx, analyst_details)
-
-
 def render_dashboard():
     st.set_page_config(page_title="PA-11R Hybrid", layout="wide")
     _css()
@@ -6424,7 +6362,6 @@ def render_dashboard():
 
     with st.sidebar:
         st.header("Research Setup")
-        dashboard_mode = st.radio("Dashboard", ["PA-11R Hybrid", "MR-1 Lite"], horizontal=False)
         ticker = st.text_input("Ticker", key="research_ticker").upper().strip()
         peer_override = st.text_input("Peer override", value="", help="Comma-separated tickers")
         fetch_peers = st.toggle("Fetch peers", value=True)
@@ -6456,10 +6393,7 @@ def render_dashboard():
     _render_saved_analysis_sidebar(ctx)
 
     st.caption("Mode: SEC evidence loaded" if include_deep_sec else "Mode: fast SEC JSON snapshot")
-    if dashboard_mode == "MR-1 Lite":
-        _render_mr1_lite(ctx, analyst_details or debug)
-    else:
-        _render_pa11r_hybrid(ctx, analyst_details or debug)
+    _render_pa11r_hybrid(ctx, analyst_details or debug)
     if debug:
         with st.expander("Debug Data Lab", expanded=False):
             _data_lab(ctx, key_prefix="debug")
