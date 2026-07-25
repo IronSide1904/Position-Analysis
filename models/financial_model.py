@@ -51,6 +51,7 @@ MODEL_ROW_ORDER = [
     "EBITDA",
     "EBITDA margin %",
     "Tax rate",
+    "Tax Expense",
     "NOPAT",
     "NOPAT margin %",
     "Operating cash flow",
@@ -63,6 +64,8 @@ MODEL_ROW_ORDER = [
     "Growth CAPEX % revenue",
     "Total CAPEX",
     "Total CAPEX % revenue",
+    "Working Capital Change",
+    "Working Capital % revenue",
     "FCF",
     "FCF margin %",
     "Adjusted FCF",
@@ -395,6 +398,8 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
     da = max(ebitda_num - ebit_num, 0) if ebitda_num is not None and ebit_num is not None else None
     opex = row.get("OPEX")
     nopat = row.get("NOPAT")
+    tax_rate = 1 - _safe_div(nopat, ebit) if ebit is not None and nopat is not None else None
+    tax_expense = max(float(ebit or 0), 0.0) * float(tax_rate or 0) if ebit is not None and tax_rate is not None else None
     ocf = row.get("OCF")
     adjusted_ocf = row.get("Adjusted OCF")
     maintenance_capex = row.get("Maintenance CAPEX")
@@ -407,7 +412,6 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
     revenue_num = _float_or_none(revenue)
     gross_profit_num = _float_or_none(gross_profit)
     cogs = -(revenue_num - gross_profit_num) if revenue_num is not None and gross_profit_num is not None else None
-    nopat_to_ebit = _safe_div(nopat, ebit)
     return {
         "Revenue": revenue,
         "Revenue growth %": _safe_delta_pct(revenue, prior_revenue),
@@ -429,7 +433,8 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
         "D&A % revenue": _safe_div(da, revenue),
         "EBITDA": ebitda,
         "EBITDA margin %": _safe_div(ebitda, revenue),
-        "Tax rate": 1 - nopat_to_ebit if nopat_to_ebit is not None else None,
+        "Tax rate": tax_rate,
+        "Tax Expense": tax_expense,
         "NOPAT": nopat,
         "NOPAT margin %": _safe_div(nopat, revenue),
         "Operating cash flow": ocf,
@@ -442,6 +447,8 @@ def _actual_model_values(row: pd.Series, prior_revenue=None, prior_shares=None) 
         "Growth CAPEX % revenue": _safe_div(growth_capex, revenue),
         "Total CAPEX": total_capex,
         "Total CAPEX % revenue": _safe_div(total_capex, revenue),
+        "Working Capital Change": None,
+        "Working Capital % revenue": None,
         "FCF": fcf,
         "FCF margin %": _safe_div(fcf, revenue),
         "Adjusted FCF": adjusted_fcf,
@@ -471,9 +478,12 @@ def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_rev
     da = forecast_row.get("D&A")
     ebitda = ebit + da if ebit is not None and da is not None else None
     ocf = forecast_row.get("OCF")
+    tax_rate = forecast_row.get("Tax Rate", assumptions.get("tax_rate"))
+    tax_expense = max(ebit or 0, 0) * tax_rate if ebit is not None and tax_rate is not None else None
     maintenance_capex = forecast_row.get("Maintenance CAPEX")
     growth_capex = forecast_row.get("Growth CAPEX")
     total_capex = forecast_row.get("CAPEX")
+    working_capital = forecast_row.get("Working Capital Investment")
     fcf = forecast_row.get("FCF")
     adjusted_ocf = ocf
     adjusted_fcf = adjusted_ocf - maintenance_capex if adjusted_ocf is not None and maintenance_capex is not None else None
@@ -501,7 +511,8 @@ def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_rev
         "D&A % revenue": forecast_row.get("D&A % Revenue", _safe_div(da, revenue)),
         "EBITDA": ebitda,
         "EBITDA margin %": _safe_div(ebitda, revenue),
-        "Tax rate": forecast_row.get("Tax Rate", assumptions.get("tax_rate")),
+        "Tax rate": tax_rate,
+        "Tax Expense": tax_expense,
         "NOPAT": forecast_row.get("NOPAT"),
         "NOPAT margin %": forecast_row.get("NOPAT Margin", _safe_div(forecast_row.get("NOPAT"), revenue)),
         "Operating cash flow": ocf,
@@ -514,6 +525,8 @@ def _forecast_model_values(forecast_row: pd.Series, assumptions: dict, prior_rev
         "Growth CAPEX % revenue": forecast_row.get("Growth CAPEX % Revenue", _safe_div(growth_capex, revenue)),
         "Total CAPEX": total_capex,
         "Total CAPEX % revenue": forecast_row.get("Total CAPEX % Revenue", _safe_div(total_capex, revenue)),
+        "Working Capital Change": working_capital,
+        "Working Capital % revenue": forecast_row.get("Working Capital % Revenue", _safe_div(working_capital, revenue)),
         "FCF": fcf,
         "FCF margin %": _safe_div(fcf, revenue),
         "Adjusted FCF": adjusted_fcf,

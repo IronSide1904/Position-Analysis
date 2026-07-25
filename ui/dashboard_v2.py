@@ -3374,6 +3374,120 @@ ASSUMPTION_FALLBACK_LINES = {
 }
 
 
+DCF_CALCULATED_ROW_METADATA = {
+    "revenue_amount": {"label": "Revenue ($)", "unit": "money", "model_lines": ["Revenue"], "source": "Calculated", "linked_input": "revenue_cagr"},
+    "cogs_amount": {"label": "COGS / Cost of Sales ($)", "unit": "money", "model_lines": ["COGS / Cost of sales", "COGS / Cost of Sales"], "source": "Calculated", "linked_input": "cogs_pct_revenue"},
+    "gross_profit_amount": {"label": "Gross Profit ($)", "unit": "money", "model_lines": ["Gross profit", "Gross Profit"], "source": "Calculated", "linked_input": "cogs_pct_revenue"},
+    "gross_margin_pct": {"label": "Gross Margin %", "unit": "%", "model_lines": ["Gross margin %", "Gross Margin %"], "source": "Calculated", "linked_input": "cogs_pct_revenue"},
+    "total_opex_amount": {"label": "Total OPEX ($)", "unit": "money", "model_lines": ["Total OPEX"], "source": "Calculated", "linked_input": "opex_pct_revenue"},
+    "ebit_amount": {"label": "EBIT ($)", "unit": "money", "model_lines": ["EBIT"], "source": "Calculated", "linked_input": "opex_pct_revenue"},
+    "ebit_margin_pct": {"label": "EBIT Margin %", "unit": "%", "model_lines": ["EBIT margin %", "EBIT Margin %"], "source": "Calculated", "linked_input": "opex_pct_revenue"},
+    "tax_expense_amount": {"label": "Tax Expense ($)", "unit": "money", "model_lines": ["Tax Expense"], "source": "Calculated", "linked_input": "tax_rate"},
+    "nopat_amount": {"label": "NOPAT ($)", "unit": "money", "model_lines": ["NOPAT"], "source": "Calculated", "linked_input": "nopat_margin"},
+    "nopat_margin_pct": {"label": "NOPAT Margin %", "unit": "%", "model_lines": ["NOPAT margin %", "NOPAT Margin %"], "source": "Calculated", "linked_input": "nopat_margin"},
+    "ocf_amount": {"label": "OCF ($)", "unit": "money", "model_lines": ["Operating cash flow", "OCF"], "source": "Calculated", "linked_input": "ocf_margin"},
+    "da_amount": {"label": "D&A ($)", "unit": "money", "model_lines": ["D&A"], "source": "Calculated", "linked_input": "depreciation_amortization_pct_revenue"},
+    "maintenance_capex_amount": {"label": "Maintenance CAPEX ($)", "unit": "money", "model_lines": ["Maintenance CAPEX"], "source": "Calculated", "linked_input": "maintenance_capex_pct_revenue"},
+    "growth_capex_amount": {"label": "Growth CAPEX ($)", "unit": "money", "model_lines": ["Growth CAPEX"], "source": "Calculated", "linked_input": "growth_capex_pct_revenue"},
+    "total_capex_amount": {"label": "Total CAPEX ($)", "unit": "money", "model_lines": ["Total CAPEX", "CAPEX"], "source": "Calculated", "linked_input": "growth_capex_pct_revenue"},
+    "working_capital_change_amount": {"label": "Working Capital Change ($)", "unit": "money", "model_lines": ["Working Capital Change", "Working Capital Investment", "Working Capital"], "source": "Calculated", "linked_input": "working_capital_pct_revenue"},
+    "fcf_amount": {"label": "FCF ($)", "unit": "money", "model_lines": ["FCF"], "source": "Calculated", "linked_input": "ocf_margin"},
+    "fcf_margin_pct": {"label": "FCF Margin %", "unit": "%", "model_lines": ["FCF margin %", "FCF Margin %"], "source": "Calculated", "linked_input": "ocf_margin"},
+    "sbc_amount": {"label": "SBC ($)", "unit": "money", "model_lines": ["SBC"], "source": "Calculated", "linked_input": "sbc_pct_revenue"},
+    "diluted_shares_amount": {"label": "Diluted Shares", "unit": "shares", "model_lines": ["Diluted shares", "Diluted Shares"], "source": "Calculated", "linked_input": "diluted_share_growth"},
+    "net_debt_amount": {"label": "Net Debt ($)", "unit": "money", "model_lines": ["Net Debt"], "source": "Calculated", "linked_input": "net_debt"},
+    "equity_value_amount": {"label": "Equity Value ($)", "unit": "money", "model_lines": [], "source": "Calculated", "linked_input": "equity_value"},
+    "fair_value_per_share_amount": {"label": "Fair Value / Share ($)", "unit": "per_share", "model_lines": [], "source": "Calculated", "linked_input": "fair_value_per_share"},
+}
+
+
+DCF_WORKBENCH_ROW_ORDER = [
+    "revenue_cagr",
+    "revenue_amount",
+    "cogs_pct_revenue",
+    "cogs_amount",
+    "gross_profit_amount",
+    "gross_margin_pct",
+    "opex_pct_revenue",
+    "total_opex_amount",
+    "ebit_amount",
+    "ebit_margin_pct",
+    "tax_rate",
+    "tax_expense_amount",
+    "nopat_margin",
+    "nopat_amount",
+    "nopat_margin_pct",
+    "ocf_margin",
+    "ocf_amount",
+    "depreciation_amortization_pct_revenue",
+    "da_amount",
+    "maintenance_capex_pct_revenue",
+    "maintenance_capex_amount",
+    "growth_capex_pct_revenue",
+    "growth_capex_amount",
+    "total_capex_amount",
+    "working_capital_pct_revenue",
+    "working_capital_change_amount",
+    "fcf_amount",
+    "fcf_margin_pct",
+    "sbc_pct_revenue",
+    "sbc_amount",
+    "diluted_share_growth",
+    "diluted_shares_amount",
+    "net_debt_amount",
+    "equity_value_amount",
+    "fair_value_per_share_amount",
+]
+
+
+DOLLAR_OVERRIDE_TO_ASSUMPTION = {
+    "revenue_amount": "revenue_cagr",
+    "cogs_amount": "cogs_pct_revenue",
+    "gross_profit_amount": "cogs_pct_revenue",
+    "total_opex_amount": "opex_pct_revenue",
+    "tax_expense_amount": "tax_rate",
+    "nopat_amount": "nopat_margin",
+    "ocf_amount": "ocf_margin",
+    "da_amount": "depreciation_amortization_pct_revenue",
+    "maintenance_capex_amount": "maintenance_capex_pct_revenue",
+    "growth_capex_amount": "growth_capex_pct_revenue",
+    "working_capital_change_amount": "working_capital_pct_revenue",
+    "sbc_amount": "sbc_pct_revenue",
+    "diluted_shares_amount": "diluted_share_growth",
+}
+
+
+WORKBENCH_GROUP_ROWS = {
+    "Key Drivers": ["revenue_cagr", "revenue_amount"],
+    "Margins & OPEX": [
+        "cogs_pct_revenue",
+        "cogs_amount",
+        "gross_profit_amount",
+        "gross_margin_pct",
+        "opex_pct_revenue",
+        "total_opex_amount",
+        "ebit_amount",
+        "ebit_margin_pct",
+        "tax_rate",
+        "tax_expense_amount",
+        "nopat_margin",
+        "nopat_amount",
+        "nopat_margin_pct",
+    ],
+    "Cash Conversion": ["ocf_margin", "ocf_amount", "working_capital_pct_revenue", "working_capital_change_amount", "fcf_amount", "fcf_margin_pct"],
+    "Reinvestment": [
+        "depreciation_amortization_pct_revenue",
+        "da_amount",
+        "maintenance_capex_pct_revenue",
+        "maintenance_capex_amount",
+        "growth_capex_pct_revenue",
+        "growth_capex_amount",
+        "total_capex_amount",
+    ],
+    "Dilution": ["sbc_pct_revenue", "sbc_amount", "diluted_share_growth", "diluted_shares_amount", "net_debt_amount", "equity_value_amount", "fair_value_per_share_amount"],
+}
+
+
 def _matrix_unit_to_assumption_unit(unit: str) -> str:
     if unit == "%":
         return "percent"
@@ -3427,6 +3541,33 @@ def _first_model_line_value(model_table: pd.DataFrame | None, line_items: list[s
         value = _model_line_value(model_table, line_item, period)
         if value is not None:
             return value
+    return None
+
+
+def _calculated_workbench_value(row_key: str, model_table: pd.DataFrame | None, period: str, dcf_output: dict | None = None, assumptions: dict | None = None):
+    meta = DCF_CALCULATED_ROW_METADATA.get(row_key, {})
+    dcf_output = dcf_output or {}
+    assumptions = assumptions or {}
+    if row_key == "equity_value_amount":
+        return dcf_output.get("equity_value")
+    if row_key == "fair_value_per_share_amount":
+        return dcf_output.get("fair_value_per_share")
+    if row_key == "net_debt_amount":
+        return assumptions.get("net_debt")
+    value = _first_model_line_value(model_table, meta.get("model_lines", []), period)
+    if value is not None:
+        return value
+    revenue = _model_line_value(model_table, "Revenue", period)
+    if row_key == "tax_expense_amount":
+        ebit = _model_line_value(model_table, "EBIT", period)
+        tax_rate = _model_line_value(model_table, "Tax rate", period)
+        return max(float(ebit or 0), 0.0) * float(tax_rate or 0) if ebit is not None and tax_rate is not None else None
+    if row_key == "working_capital_change_amount":
+        wc_pct = _model_line_value(model_table, "Working Capital % Revenue", period) or _model_line_value(model_table, "Working Capital % revenue", period)
+        return float(revenue) * float(wc_pct) if revenue is not None and wc_pct is not None else None
+    if row_key == "fcf_margin_pct":
+        fcf = _model_line_value(model_table, "FCF", period)
+        return _ratio_or_none(fcf, revenue)
     return None
 
 
@@ -3577,6 +3718,8 @@ def _build_assumption_matrix(
     assumptions: dict,
     historicals: pd.DataFrame | None,
     model_table: pd.DataFrame | None = None,
+    dcf_output: dict | None = None,
+    advanced_overrides: bool = False,
 ) -> tuple[pd.DataFrame, list[tuple[int, str]], list[str]]:
     specs = _forecast_period_specs(historicals, int(assumptions.get("forecast_years", 5) or 5))
     forecast_labels = [label for _, label in specs]
@@ -3584,17 +3727,33 @@ def _build_assumption_matrix(
     rows = []
     cell_evidence = {}
     cell_metadata = {}
-    for row_key, meta in DCF_ROW_METADATA.items():
-        estimate_meta = _estimate_metadata_for_row(assumptions, row_key)
+    for row_key in DCF_WORKBENCH_ROW_ORDER:
+        input_meta = DCF_ROW_METADATA.get(row_key)
+        calc_meta = DCF_CALCULATED_ROW_METADATA.get(row_key)
+        if not input_meta and not calc_meta:
+            continue
+        meta = input_meta or calc_meta
+        is_input = input_meta is not None
+        is_override_capable = row_key in DOLLAR_OVERRIDE_TO_ASSUMPTION
+        estimate_meta = _estimate_metadata_for_row(assumptions, row_key) if is_input else {}
         row_evidence = {}
         row = {
             "Row Key": row_key,
             "Assumption": meta["label"],
-            "Row Type": "Input",
+            "Row Type": "Input" if is_input else "Override" if advanced_overrides and is_override_capable else "Calculated",
         }
         for label in actual_labels:
-            actual_value = _assumption_actual_value(row_key, model_table, label, assumptions)
-            evidence = _assumption_actual_evidence(row_key, model_table, label, assumptions)
+            if is_input:
+                actual_value = _assumption_actual_value(row_key, model_table, label, assumptions)
+                evidence = _assumption_actual_evidence(row_key, model_table, label, assumptions)
+            else:
+                actual_value = _calculated_workbench_value(row_key, model_table, label, dcf_output, assumptions)
+                evidence = {
+                    "evidence_grade": "Calculated",
+                    "method": f"{meta['label']} calculated from the linked operating model",
+                    "confidence": "High",
+                    "source": "DCF linked model",
+                }
             cell_evidence[f"{row_key}|{label}"] = evidence
             cell_metadata[f"{row_key}|{label}"] = {
                 "period_type": "ltm" if label == "LTM Latest" else "actual",
@@ -3606,22 +3765,34 @@ def _build_assumption_matrix(
             row_evidence[label] = evidence
             row[label] = _display_assumption_cell(actual_value, meta["unit"])
         for year, label in specs:
-            evidence = {
-                "evidence_grade": "Scenario-based",
-                "method": "Forecast scenario assumption",
-                "confidence": estimate_meta.get("confidence") or "Medium",
-                "source": "DCF scenario",
-            }
+            if is_input:
+                value = _matrix_value_for_key(assumptions, year, row_key)
+                evidence = {
+                    "evidence_grade": "Scenario-based",
+                    "method": "Forecast scenario assumption",
+                    "confidence": estimate_meta.get("confidence") or "Medium",
+                    "source": "DCF scenario",
+                }
+                editable = True
+            else:
+                value = _calculated_workbench_value(row_key, model_table, label, dcf_output, assumptions)
+                evidence = {
+                    "evidence_grade": "Calculated",
+                    "method": f"{meta['label']} calculated from the linked operating model",
+                    "confidence": "High",
+                    "source": "DCF linked model",
+                }
+                editable = bool(advanced_overrides and is_override_capable)
             cell_evidence[f"{row_key}|{label}"] = evidence
             cell_metadata[f"{row_key}|{label}"] = {
                 "period_type": "forecast",
-                "editable": True,
+                "editable": editable,
                 "source": evidence.get("source"),
                 "evidence_grade": evidence.get("evidence_grade"),
                 "confidence": evidence.get("confidence"),
             }
             row_evidence[label] = evidence
-            row[label] = _display_assumption_cell(_matrix_value_for_key(assumptions, year, row_key), meta["unit"])
+            row[label] = _display_assumption_cell(value, meta["unit"])
         evidence_grades = {item["evidence_grade"] for item in row_evidence.values()}
         confidences = {item["confidence"] for item in row_evidence.values()}
         row["Evidence"] = evidence_grades.pop() if len(evidence_grades) == 1 else "Mixed"
@@ -3753,6 +3924,8 @@ def _apply_assumption_matrix(assumptions: dict, edited_matrix: pd.DataFrame, spe
         row_key = row.get("Row Key")
         meta = DCF_ROW_METADATA.get(row_key)
         if not meta:
+            if str(row.get("Row Type")) == "Override" and row_key in DOLLAR_OVERRIDE_TO_ASSUMPTION:
+                _apply_dollar_override_row(out, yearly, edited_matrix, specs, row_key)
             continue
         for year, label in specs:
             value = _internal_assumption_number(row.get(label), meta["unit"])
@@ -3778,6 +3951,75 @@ def _apply_valuation_assumption_table(assumptions: dict, edited_table: pd.DataFr
         if value is not None:
             out[meta["assumption_key"]] = value
     return _normalize_assumption_bridge(out, bool(out.get("use_direct_nopat_override")))
+
+
+def _matrix_internal_value(matrix: pd.DataFrame, row_key: str, period: str, unit: str | None = None):
+    if matrix is None or matrix.empty or period not in matrix.columns:
+        return None
+    rows = matrix[matrix["Row Key"].astype(str) == row_key]
+    if rows.empty:
+        return None
+    if unit is None:
+        meta = DCF_ROW_METADATA.get(row_key) or DCF_CALCULATED_ROW_METADATA.get(row_key) or {}
+        unit = meta.get("unit", "money")
+    return _internal_assumption_number(rows.iloc[0].get(period), unit)
+
+
+def _previous_period_value(matrix: pd.DataFrame, row_key: str, period: str, periods: list[str], unit: str | None = None):
+    if period not in periods:
+        return None
+    idx = periods.index(period)
+    for previous in reversed(periods[:idx]):
+        value = _matrix_internal_value(matrix, row_key, previous, unit)
+        if value is not None:
+            return value
+    return None
+
+
+def _apply_dollar_override_row(out: dict, yearly: dict, edited_matrix: pd.DataFrame, specs: list[tuple[int, str]], row_key: str) -> None:
+    forecast_labels = [label for _, label in specs]
+    all_periods = [col for col in edited_matrix.columns if col not in {"Row Key", "Assumption", "Row Type", "Evidence", "Confidence"}]
+    for year, label in specs:
+        value = _matrix_internal_value(edited_matrix, row_key, label)
+        if value is None:
+            continue
+        revenue = _matrix_internal_value(edited_matrix, "revenue_amount", label, "money")
+        year_values = yearly.setdefault(str(year), {})
+        if row_key == "revenue_amount":
+            prior_revenue = _previous_period_value(edited_matrix, "revenue_amount", label, all_periods, "money")
+            if prior_revenue:
+                year_values["revenue_cagr"] = value / prior_revenue - 1
+        elif row_key == "cogs_amount" and revenue:
+            year_values["gross_margin"] = 1 - abs(value) / revenue
+        elif row_key == "gross_profit_amount" and revenue:
+            year_values["gross_margin"] = value / revenue
+        elif row_key == "total_opex_amount" and revenue:
+            year_values["opex_pct_revenue"] = abs(value) / revenue
+        elif row_key == "tax_expense_amount":
+            ebit = _matrix_internal_value(edited_matrix, "ebit_amount", label, "money")
+            if ebit is not None and abs(ebit) > 1e-9:
+                year_values["tax_rate"] = value / max(ebit, 1e-9)
+        elif row_key == "nopat_amount" and revenue:
+            year_values["nopat_margin"] = value / revenue
+            out["use_direct_nopat_override"] = True
+        elif row_key == "ocf_amount" and revenue:
+            year_values["ocf_margin"] = value / revenue
+        elif row_key == "da_amount" and revenue:
+            year_values["depreciation_amortization_pct_revenue"] = value / revenue
+            if out.get("use_da_as_maintenance_capex_proxy"):
+                year_values["maintenance_capex_pct_revenue"] = value / revenue
+        elif row_key == "maintenance_capex_amount" and revenue:
+            year_values["maintenance_capex_pct_revenue"] = abs(value) / revenue
+        elif row_key == "growth_capex_amount" and revenue:
+            year_values["growth_capex_pct_revenue"] = abs(value) / revenue
+        elif row_key == "working_capital_change_amount" and revenue:
+            year_values["working_capital_pct_revenue"] = value / revenue
+        elif row_key == "sbc_amount" and revenue:
+            year_values["sbc_pct_revenue"] = abs(value) / revenue
+        elif row_key == "diluted_shares_amount":
+            prior_shares = _previous_period_value(edited_matrix, "diluted_shares_amount", label, all_periods, "shares") or out.get("diluted_shares")
+            if prior_shares:
+                year_values["diluted_share_growth"] = value / prior_shares - 1
 
 
 def _assumption_matrix_quality_warnings(matrix: pd.DataFrame, actual_labels: list[str], forecast_labels: list[str]) -> list[str]:
@@ -3979,7 +4221,8 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
     preview_model_table = build_time_axis_financial_model(ctx["historicals"], preview_dcf.get("forecast_table"), working)
     st.markdown('<div class="pa-section-title">DCF Assumption Workbench</div>', unsafe_allow_html=True)
     st.caption("Edit forecast assumptions in grouped draft mode. Percentage rows use human units: enter 8.0 for 8.0%. The DCF model recalculates only after Apply Changes & Recalculate.")
-    original_matrix, specs, locked_period_columns = _build_assumption_matrix(working, ctx.get("historicals"), preview_model_table)
+    advanced_overrides = bool(st.session_state.get("advanced_overrides_enabled", False))
+    original_matrix, specs, locked_period_columns = _build_assumption_matrix(working, ctx.get("historicals"), preview_model_table, preview_dcf, advanced_overrides=advanced_overrides)
     period_columns = [label for _, label in specs]
     all_period_columns = [*locked_period_columns, *period_columns]
     read_only = scenario_scope == "Market-Implied Case"
@@ -3987,12 +4230,12 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
     st.markdown("**DCF Assumption Workbench**")
     st.caption("Edit assumptions here. Changes are saved as draft until you click Apply Changes & Recalculate.")
     group_specs = [
-        ("Key Drivers", ["revenue_cagr"]),
-        ("Margins & OPEX", ["cogs_pct_revenue", "opex_pct_revenue", "tax_rate", "nopat_margin"]),
-        ("Cash Conversion", ["ocf_margin", "working_capital_pct_revenue"]),
-        ("Reinvestment", ["depreciation_amortization_pct_revenue", "maintenance_capex_pct_revenue", "growth_capex_pct_revenue"]),
+        ("Key Drivers", WORKBENCH_GROUP_ROWS["Key Drivers"]),
+        ("Margins & OPEX", WORKBENCH_GROUP_ROWS["Margins & OPEX"]),
+        ("Cash Conversion", WORKBENCH_GROUP_ROWS["Cash Conversion"]),
+        ("Reinvestment", WORKBENCH_GROUP_ROWS["Reinvestment"]),
         ("Terminal Value", []),
-        ("Dilution", ["sbc_pct_revenue", "diluted_share_growth"]),
+        ("Dilution", WORKBENCH_GROUP_ROWS["Dilution"]),
     ]
     group_tabs = st.tabs([name for name, _rows in group_specs])
     group_results = []
@@ -4026,7 +4269,9 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             if group_matrix.empty:
                 st.info(f"No {group_name} assumptions available.")
                 continue
-            st.caption("Input rows are editable for forecast periods. Historical/LTM columns are locked context.")
+            st.caption("Input rows are editable for forecast periods. Calculated rows show the dollar impact and are locked unless Advanced Overrides is enabled.")
+            if advanced_overrides and any(str(row.get("Row Type")) == "Override" for _, row in group_matrix.iterrows()):
+                st.warning("Advanced Overrides enabled: dollar rows marked Override can be edited. Apply will reverse-calculate the implied percentage assumption.")
             result = render_editable_assumption_table(
                 group_matrix,
                 key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}_{re.sub(r'[^A-Za-z0-9]+', '_', group_name).lower()}",
@@ -4452,7 +4697,7 @@ def _assumption_editor(ctx: dict) -> dict:
         )
         st.session_state["advanced_overrides_enabled"] = advanced_overrides
         if advanced_overrides:
-            st.info("Advanced override mode is enabled for review, but calculated dollar rows remain protected in this cockpit table until override rows are explicitly added.")
+            st.info("Advanced override mode is enabled. Calculated dollar rows marked Override can be edited; Apply reverse-calculates the implied percentage assumptions.")
 
     edited = _render_assumption_matrix_workbench(ctx, base, working, scenario_scope, profile)
     if scenario_scope == "User Case":

@@ -72,6 +72,52 @@ def _editable_period_columns(frame: pd.DataFrame) -> list[str]:
     return [col for col in frame.columns if col not in static]
 
 
+def _model_impact_text(assumption: str, row_type: str) -> str:
+    text = str(assumption or "").lower()
+    if row_type == "Override":
+        return "Override active: implied percentage / ratio recalculates downstream model rows."
+    if "opex" in text:
+        return "OPEX, EBIT, NOPAT, FCF, fair value."
+    if "cogs" in text or "gross" in text:
+        return "Gross profit, EBIT, NOPAT, FCF, fair value."
+    if "tax" in text:
+        return "Tax expense, NOPAT, FCF, fair value."
+    if "nopat" in text:
+        return "NOPAT, FCF, fair value."
+    if "ocf" in text:
+        return "OCF, FCF, fair value."
+    if "capex" in text:
+        return "CAPEX, FCF, fair value."
+    if "working capital" in text:
+        return "Working capital, FCF, fair value."
+    if "sbc" in text:
+        return "SBC, dilution, per-share value."
+    if "share" in text:
+        return "Diluted shares and fair value per share."
+    if "revenue" in text:
+        return "Revenue, margins, cash flow, fair value."
+    return "DCF output and scenario comparison."
+
+
+def _restore_locked_rows(committed: pd.DataFrame, edited: pd.DataFrame) -> pd.DataFrame:
+    if committed is None or edited is None or committed.empty or edited.empty or "Row Key" not in committed or "Row Key" not in edited:
+        return edited
+    out = edited.copy()
+    committed_index = committed.set_index("Row Key", drop=False)
+    period_cols = _editable_period_columns(committed)
+    for idx, row in out.iterrows():
+        row_key = row.get("Row Key")
+        if row_key not in committed_index.index:
+            continue
+        row_type = str(committed_index.loc[row_key].get("Row Type", "Input"))
+        if row_type in {"Input", "Override"}:
+            continue
+        for period in period_cols:
+            if period in out.columns:
+                out.at[idx, period] = committed_index.loc[row_key].get(period)
+    return out
+
+
 def detect_assumption_changes(committed: pd.DataFrame, draft: pd.DataFrame) -> pd.DataFrame:
     """
     Compare committed vs draft assumptions.
@@ -80,7 +126,7 @@ def detect_assumption_changes(committed: pd.DataFrame, draft: pd.DataFrame) -> p
     Assumption, Period, Old Value, New Value, Delta, Scenario, Status.
     """
     if committed is None or draft is None or committed.empty or draft.empty:
-        return pd.DataFrame(columns=["Assumption", "Period", "Old Value", "New Value", "Delta", "Scenario", "Status"])
+        return pd.DataFrame(columns=["Assumption", "Period", "Old Value", "New Value", "Delta", "Row Type", "Model Impact", "Scenario", "Status"])
     key_col = "Row Key" if "Row Key" in committed.columns and "Row Key" in draft.columns else None
     left = committed.set_index(key_col, drop=False) if key_col else committed.copy()
     right = draft.set_index(key_col, drop=False) if key_col else draft.copy()
@@ -109,6 +155,8 @@ def detect_assumption_changes(committed: pd.DataFrame, draft: pd.DataFrame) -> p
                     "Old Value": old_value,
                     "New Value": new_value,
                     "Delta": _delta(old_value, new_value),
+                    "Row Type": row_type,
+                    "Model Impact": _model_impact_text(assumption, row_type),
                     "Scenario": new_row.get("Scenario", ""),
                     "Status": "Pending",
                 }
@@ -189,6 +237,7 @@ def render_editable_assumption_table(
         disabled=editor_disabled,
         key=key,
     )
+    edited = _restore_locked_rows(committed_df, edited)
     draft_bucket[key] = edited.copy()
     pending = detect_assumption_changes(committed_df, edited)
     pending_bucket[key] = pending.copy()
