@@ -4420,6 +4420,8 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
     alignment = analyze_compensation_alignment(dataset.get("filing_texts", {}), historicals)
     moat = analyze_moat(dataset, historicals, dataset.get("filing_texts", {}), peer_df, clauses)
     risks = analyze_risks_and_thesis_breakers(dataset.get("filing_texts", {}), clauses, historicals)
+    business_driver_profile = infer_business_driver_profile(dataset, dataset.get("filing_texts", {}), peer_df)
+    driver_template = get_driver_template(business_driver_profile.get("profile", "General"))
     pa11_story = build_pa11_story(
         dataset,
         filing_texts=dataset.get("filing_texts", {}),
@@ -4431,6 +4433,8 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
         ma_analysis=ma,
         management_analysis=management,
         moat_analysis=moat,
+        business_driver_profile=business_driver_profile,
+        driver_template=driver_template,
     )
     scoring = score_investment(
         {
@@ -4464,6 +4468,8 @@ def _build_context(ticker: str, peer_override: str, fetch_peers: bool, include_d
         "alignment": alignment,
         "moat": moat,
         "risks": risks,
+        "business_driver_profile": business_driver_profile,
+        "driver_template": driver_template,
         "scoring": scoring,
         "thesis": thesis,
     }
@@ -6282,19 +6288,23 @@ def _pa11_story_snapshot(ctx: dict) -> None:
     story = ctx.get("pa11_story") or {}
     render_section(
         "PA-11 Story & Assumption Map",
-        "Read the business story first, then decide which User Case assumptions deserve review.",
+        "Read the economic engine first, then decide which User Case assumptions deserve review.",
         "Story",
     )
     c1, c2 = st.columns([0.58, 0.42])
     with c1:
-        st.markdown("**Company Story**")
-        st.write(_clip_text(story.get("what_they_do") or story.get("company_one_liner") or "Unavailable", 420))
-        st.markdown("**How It Makes Money**")
-        st.write(_clip_text(story.get("how_they_make_money") or "Unavailable", 320))
-        st.markdown("**Key Growth Drivers**")
-        growth_rows = story.get("growth_drivers") or []
-        if growth_rows:
-            _mini_list("Growth drivers", [row.get("Driver") for row in growth_rows])
+        st.markdown("**PA-11 Story**")
+        st.write(_clip_text(story.get("what_they_do") or story.get("company_one_liner") or "Unavailable", 360))
+        st.markdown("**Economic Engine**")
+        st.write(_clip_text(story.get("economic_engine_summary") or story.get("how_they_make_money") or "Unavailable", 520))
+        st.caption(
+            f"Business model: {story.get('business_model_type', 'General')} | "
+            f"Confidence: {story.get('business_model_confidence', 'Low')}"
+        )
+        st.markdown("**Key Drivers**")
+        driver_rows = story.get("driver_to_assumption_map") or []
+        if driver_rows:
+            _mini_list("Key drivers", [row.get("driver") for row in driver_rows[:4]])
         else:
             st.write("Unavailable")
     with c2:
@@ -6307,20 +6317,62 @@ def _pa11_story_snapshot(ctx: dict) -> None:
         st.markdown("**Latest Updates / Events**")
         st.write(_clip_text(story.get("latest_updates") or "Dashboard has not fetched recent news/social data yet.", 260))
 
-    with st.expander("Open full PA-11 Story", expanded=False):
+    with st.expander("Open Full Story & Driver Map", expanded=False):
         story_sections = pd.DataFrame(
             [
-                {"Section": "What they sell", "Read": story.get("product_story")},
-                {"Section": "Industry position", "Read": story.get("industry_positioning")},
-                {"Section": "M&A effect on growth", "Read": story.get("ma_effect_on_growth")},
+                {"Section": "Company story", "Read": story.get("what_they_do")},
+                {"Section": "Economic engine", "Read": story.get("economic_engine_summary")},
+                {"Section": "Product / service story", "Read": story.get("product_or_service_story") or story.get("product_story")},
+                {"Section": "Competitive dynamics", "Read": story.get("competitive_dynamics")},
+                {"Section": "Sector / theme context", "Read": story.get("industry_theme_context")},
+                {"Section": "Peer context", "Read": story.get("peer_positioning_context") or story.get("peer_context")},
+                {"Section": "M&A impact on drivers", "Read": story.get("ma_effect_on_growth")},
                 {"Section": "New drivers / changes", "Read": story.get("new_drivers_or_changes")},
-                {"Section": "Peer context", "Read": story.get("peer_context")},
                 {"Section": "Social/news buzz", "Read": story.get("social_buzz_context")},
-                {"Section": "Moat / risk context", "Read": story.get("moat_and_risk_context")},
+                {"Section": "Moat / risk context", "Read": story.get("moat_context") or story.get("moat_and_risk_context")},
                 {"Section": "Management context", "Read": story.get("management_context")},
             ]
         )
         show_table(story_sections, "Story sections unavailable.")
+        driver_category_rows = pd.DataFrame(
+            [
+                {"Driver category": "Revenue", "Drivers": ", ".join(story.get("core_revenue_drivers") or [])},
+                {"Driver category": "Margin", "Drivers": ", ".join(story.get("core_margin_drivers") or [])},
+                {"Driver category": "OPEX", "Drivers": ", ".join(story.get("core_opex_drivers") or [])},
+                {"Driver category": "OCF / cash conversion", "Drivers": ", ".join(story.get("core_ocf_drivers") or [])},
+                {"Driver category": "CAPEX / reinvestment", "Drivers": ", ".join(story.get("core_capex_drivers") or [])},
+                {"Driver category": "Balance sheet / dilution", "Drivers": ", ".join(story.get("core_dilution_or_balance_sheet_drivers") or [])},
+                {"Driver category": "Terminal value", "Drivers": ", ".join(story.get("core_terminal_value_drivers") or [])},
+            ]
+        )
+        st.markdown("**Business Model Drivers**")
+        show_table(driver_category_rows, "No business-model driver categories available.")
+        st.markdown("**Sector / Theme / Peer Context**")
+        sector_peer = story.get("sector_theme_peer_context") or {}
+        show_table(
+            pd.DataFrame(
+                [
+                    {"Context": "Sector summary", "Read": sector_peer.get("sector_summary")},
+                    {"Context": "Theme summary", "Read": sector_peer.get("theme_summary")},
+                    {"Context": "Peer positioning", "Read": sector_peer.get("peer_positioning")},
+                    {"Context": "Relative strengths", "Read": ", ".join(sector_peer.get("relative_strengths") or [])},
+                    {"Context": "Relative weaknesses", "Read": ", ".join(sector_peer.get("relative_weaknesses") or [])},
+                    {"Context": "Assumption implications", "Read": " ".join(sector_peer.get("assumption_implications") or [])},
+                ]
+            ),
+            "No sector/theme/peer context available.",
+        )
+        st.markdown("**Growth Driver Story**")
+        st.write(_clip_text(story.get("growth_driver_story") or "Unavailable", 620))
+        st.markdown("**Clause / Evidence Map**")
+        show_table(pd.DataFrame(story.get("relevant_clauses") or []), "No clause-level evidence map available.")
+        st.markdown("**Driver-to-Assumption Map**")
+        driver_map = pd.DataFrame(story.get("driver_to_assumption_map") or [])
+        if not driver_map.empty and "affected_assumptions" in driver_map.columns:
+            driver_map["affected_assumptions"] = driver_map["affected_assumptions"].apply(lambda value: ", ".join(value) if isinstance(value, list) else value)
+        show_table(driver_map, "No driver-to-assumption map available.")
+        st.markdown("**Driver Reflection Map**")
+        show_table(pd.DataFrame(story.get("driver_reflection_map") or []), "No driver reflection map available.")
         st.markdown("**Growth Driver Map**")
         show_table(pd.DataFrame(story.get("growth_drivers") or []), "No growth-driver map available.")
         st.markdown("**What This Means For Assumptions**")
