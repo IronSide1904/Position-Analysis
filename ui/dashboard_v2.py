@@ -3488,6 +3488,211 @@ WORKBENCH_GROUP_ROWS = {
 }
 
 
+ECONOMIC_ENGINE_COPY = {
+    "AI Infrastructure / Data Center": {
+        "engine": "Capacity x revenue per GW x utilization, funded by CAPEX, customer prepayments, debt, and equity.",
+        "review": "GPU/chip generation mix, revenue per GW, utilization, energy cost, build cost per GW, customer prepayments, dilution.",
+    },
+    "Consumer Brand / Retail": {
+        "engine": "Volume/store growth plus pricing and mix, supported by supplier power, inventory turns, and working-capital efficiency.",
+        "review": "Store/unit growth, same-store productivity, pricing, inventory turns, supplier terms, store expansion CAPEX.",
+    },
+    "SaaS / Software": {
+        "engine": "Recurring revenue growth from retention, expansion, new customers, and pricing, with margin expansion from operating leverage.",
+        "review": "NRR, churn, ARPU/ACV, S&M efficiency, SBC dilution, deferred revenue, OCF conversion.",
+    },
+    "Industrial / Hardware": {
+        "engine": "Backlog/orders x conversion x ASP/mix, with utilization, inventory, and CAPEX determining cash conversion.",
+        "review": "Backlog, book-to-bill, utilization, ASP/mix, inventory build, maintenance CAPEX, growth CAPEX.",
+    },
+    "Marketplace / Platform": {
+        "engine": "GMV/activity x take rate, supported by active users, transaction frequency, network effects, and trust/safety cost control.",
+        "review": "GMV, take rate, active users, transactions per user, network strength, trust cost, marketing intensity.",
+    },
+    "Financial / Fintech": {
+        "engine": "Asset/volume growth x spread or fee rate, adjusted for credit losses, efficiency, capital needs, and ROE.",
+        "review": "AUM/deposits/loan book, NIM/fee yield, transaction volume, credit losses, efficiency ratio, capital ratio.",
+    },
+    "Energy / Commodity": {
+        "engine": "Production volume x realized price less operating cost, decline-rate reinvestment, hedging, and leverage.",
+        "review": "Production volume, realized price, operating cost per unit, reserve life, decline rate, CAPEX, hedging, net debt.",
+    },
+    "General": {
+        "engine": "Revenue growth, margin structure, cash conversion, reinvestment needs, balance-sheet risk, and terminal value durability.",
+        "review": "Revenue growth source, gross margin, OPEX leverage, OCF conversion, CAPEX intensity, dilution, WACC, terminal multiple.",
+    },
+}
+
+
+def _driver_display_value(value, unit: str) -> str:
+    if value is None:
+        return "Manual Review"
+    if unit == "%":
+        return format_assumption_value(value, "percent")
+    if unit in {"money", "per_share", "shares", "years", "x"}:
+        return format_assumption_value(value, {"money": "money", "per_share": "per_share", "shares": "shares", "years": "years", "x": "multiple"}[unit])
+    return format_assumption_value(value, "decimal")
+
+
+def _driver_internal_value(value, unit: str):
+    if isinstance(value, str) and value.strip().lower() in {"manual review", "unavailable", "not meaningful", "not applicable", "not calculated"}:
+        return None
+    if unit == "%":
+        return _internal_assumption_number(value, "%")
+    if unit == "money":
+        return _internal_assumption_number(value, "money")
+    if unit == "per_share":
+        return _internal_assumption_number(value, "money")
+    if unit == "shares":
+        return _internal_assumption_number(value, "shares")
+    if unit == "years":
+        return _internal_assumption_number(value, "years")
+    if unit == "x":
+        return _internal_assumption_number(value, "x")
+    return _parse_assumption_value(value, "decimal")
+
+
+def _selected_driver_profile(ctx: dict, ticker: str) -> tuple[str, dict]:
+    detected = infer_business_driver_profile(ctx.get("dataset", {}), ctx.get("dataset", {}).get("filing_texts"), ctx.get("peer_df"))
+    options = [item for item in driver_profile_options() if item in MODEL_TYPES or item == "General"]
+    default = detected.get("profile") if detected.get("profile") in options else "General"
+    stored = st.session_state.get(f"key_driver_profile_{ticker}", default)
+    if stored not in options:
+        stored = default
+    selected = st.selectbox(
+        "Business driver profile",
+        options,
+        index=options.index(stored),
+        key=f"key_driver_profile_select_{ticker}",
+        help="Select the business model template used to structure valuation drivers.",
+    )
+    st.session_state[f"key_driver_profile_{ticker}"] = selected
+    return selected, detected
+
+
+def _profile_driver_matrix(ctx: dict, selected_profile: str, assumptions: dict, specs: list[tuple[int, str]]) -> pd.DataFrame:
+    dataset = ctx.get("dataset", {})
+    market = dataset.get("market_data", {})
+    profile_obj = build_business_model_profile(selected_profile)
+    years = len(specs)
+    matrix_key = _driver_matrix_session_key(dataset.get("ticker", "default"), "Key Drivers", profile_obj.model_type)
+    if matrix_key not in st.session_state:
+        st.session_state[matrix_key] = default_driver_matrix(profile_obj, ctx.get("historicals"), market, assumptions, years=years)
+    return st.session_state[matrix_key].copy()
+
+
+def _build_profile_key_driver_table(
+    ctx: dict,
+    assumptions: dict,
+    model_table: pd.DataFrame,
+    dcf_output: dict,
+    original_matrix: pd.DataFrame,
+    specs: list[tuple[int, str]],
+    locked_period_columns: list[str],
+    selected_profile: str,
+    advanced_overrides: bool,
+) -> pd.DataFrame:
+    profile_obj = build_business_model_profile(selected_profile)
+    template = get_driver_template(selected_profile)
+    driver_matrix = _profile_driver_matrix(ctx, selected_profile, assumptions, specs)
+    period_map = dict(zip(period_labels(len(specs)), [label for _year, label in specs]))
+    rows = []
+    for _, driver in driver_matrix.iterrows():
+        confidence = driver.get("Confidence") or "Low"
+        row_type = "Manual Review" if str(confidence).lower() == "low" and "analyst estimate" in str(driver.get("Method", "")).lower() else "Input"
+        row = {
+            "Row Key": f"driver:{driver.get('row_key')}",
+            "Driver / Assumption": driver.get("Driver"),
+            "Assumption": driver.get("Driver"),
+            "Row Type": row_type,
+            "Evidence": driver.get("Evidence Grade") or "Estimated",
+            "Confidence": confidence,
+            "Model Impact": driver.get("Model Impact"),
+            "Source / Basis": driver.get("Method"),
+            "Manual Review Needed": "Yes" if row_type == "Manual Review" else "No",
+        }
+        for label in locked_period_columns:
+            row[label] = _driver_display_value(driver.get("Historical / LTM"), driver.get("Unit"))
+        for driver_period, forecast_label in period_map.items():
+            row[forecast_label] = _driver_display_value(driver.get(driver_period), driver.get("Unit"))
+        rows.append(row)
+
+    financial_row_keys = [
+        "revenue_cagr",
+        "revenue_amount",
+        "total_opex_amount",
+        "ebit_amount",
+        "nopat_amount",
+        "ocf_amount",
+        "maintenance_capex_amount",
+        "growth_capex_amount",
+        "total_capex_amount",
+        "working_capital_change_amount",
+        "fcf_amount",
+        "diluted_shares_amount",
+        "fair_value_per_share_amount",
+    ]
+    financial_rows = original_matrix[original_matrix["Row Key"].isin(financial_row_keys)].copy()
+    for _, source in financial_rows.iterrows():
+        row = {
+            "Row Key": source.get("Row Key"),
+            "Driver / Assumption": source.get("Assumption"),
+            "Assumption": source.get("Assumption"),
+            "Row Type": source.get("Row Type"),
+            "Evidence": source.get("Evidence"),
+            "Confidence": source.get("Confidence"),
+            "Model Impact": "Financial output connected to the driver forecast and DCF valuation.",
+            "Source / Basis": "Linked DCF operating model",
+            "Manual Review Needed": "No",
+        }
+        for label in [*locked_period_columns, *[forecast for _year, forecast in specs]]:
+            if label in source:
+                row[label] = source.get(label)
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    ordered = ["Row Key", "Driver / Assumption", "Assumption", "Row Type", "Evidence", "Confidence", "Model Impact", "Source / Basis", "Manual Review Needed", *locked_period_columns, *[label for _year, label in specs]]
+    return out[[col for col in ordered if col in out.columns]]
+
+
+def _apply_profile_driver_table(ctx: dict, selected_profile: str, display_table: pd.DataFrame, assumptions: dict, specs: list[tuple[int, str]], scenario_scope: str, persist: bool = True) -> dict:
+    dataset = ctx.get("dataset", {})
+    market = dataset.get("market_data", {})
+    profile_obj = build_business_model_profile(selected_profile)
+    years = len(specs)
+    driver_matrix = default_driver_matrix(profile_obj, ctx.get("historicals"), market, assumptions, years=years)
+    period_map = dict(zip([label for _year, label in specs], period_labels(years)))
+    by_key = driver_matrix.set_index("row_key", drop=False)
+    display = display_table.copy() if display_table is not None else pd.DataFrame()
+    for _, row in display.iterrows():
+        row_key = str(row.get("Row Key") or "")
+        if not row_key.startswith("driver:"):
+            continue
+        driver_key = row_key.split("driver:", 1)[1]
+        if driver_key not in by_key.index:
+            continue
+        unit = by_key.loc[driver_key].get("Unit")
+        for forecast_label, driver_period in period_map.items():
+            if forecast_label not in display.columns:
+                continue
+            value = _driver_internal_value(row.get(forecast_label), unit)
+            if value is not None:
+                by_key.at[driver_key, driver_period] = value
+    edited_driver_matrix = by_key.reset_index(drop=True)
+    if persist:
+        st.session_state[_driver_matrix_session_key(dataset.get("ticker", "default"), "Key Drivers", profile_obj.model_type)] = edited_driver_matrix.copy()
+    integrated = integrate_driver_valuation(
+        scenario_scope,
+        profile_obj,
+        edited_driver_matrix,
+        ctx.get("historicals"),
+        market,
+        assumptions,
+        maintenance_treatment=profile_obj.maintenance_cost_treatment,
+        capitalized_maintenance_pct=1.0,
+    )
+    return integrated.dcf_assumptions or assumptions
+
+
 def _matrix_unit_to_assumption_unit(unit: str) -> str:
     if unit == "%":
         return "percent"
@@ -4265,42 +4470,85 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
                     read_only=read_only,
                 )
                 continue
-            group_matrix = original_matrix[original_matrix["Row Key"].isin(row_keys)].copy()
+            selected_driver_profile = None
+            if group_name == "Key Drivers":
+                selected_driver_profile, detected_profile = _selected_driver_profile(ctx, ticker)
+                profile_copy = ECONOMIC_ENGINE_COPY.get(selected_driver_profile, ECONOMIC_ENGINE_COPY["General"])
+                st.markdown(f"**Business Driver Profile: {selected_driver_profile}**")
+                st.caption(f"Inferred profile: {detected_profile.get('profile')} ({detected_profile.get('confidence')}). {detected_profile.get('reason')}")
+                st.info(f"**Economic Engine:** {profile_copy['engine']}")
+                st.caption(f"Key assumptions to review: {profile_copy['review']}")
+                group_matrix = _build_profile_key_driver_table(
+                    ctx,
+                    working,
+                    preview_model_table,
+                    preview_dcf,
+                    original_matrix,
+                    specs,
+                    locked_period_columns,
+                    selected_driver_profile,
+                    advanced_overrides,
+                )
+            else:
+                group_matrix = original_matrix[original_matrix["Row Key"].isin(row_keys)].copy()
             if group_matrix.empty:
                 st.info(f"No {group_name} assumptions available.")
                 continue
             st.caption("Input rows are editable for forecast periods. Calculated rows show the dollar impact and are locked unless Advanced Overrides is enabled.")
             if advanced_overrides and any(str(row.get("Row Type")) == "Override" for _, row in group_matrix.iterrows()):
                 st.warning("Advanced Overrides enabled: dollar rows marked Override can be edited. Apply will reverse-calculate the implied percentage assumption.")
+            static_disabled = ["Row Key", "Driver / Assumption", "Assumption", "Row Type", "Evidence", "Confidence", "Model Impact", "Source / Basis", "Manual Review Needed"]
             result = render_editable_assumption_table(
                 group_matrix,
                 key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}_{re.sub(r'[^A-Za-z0-9]+', '_', group_name).lower()}",
                 scenario_scope=scenario_scope,
-                column_config={"Row Key": None},
-                height=320,
-                disabled_columns=["Row Key", "Assumption", "Row Type", "Evidence", "Confidence", *all_period_columns] if read_only else ["Row Key", "Assumption", "Row Type", "Evidence", "Confidence", *locked_period_columns],
+                column_config={"Row Key": None, "Assumption": None},
+                height=520 if group_name == "Key Drivers" else 320,
+                disabled_columns=[col for col in [*static_disabled, *all_period_columns] if col in group_matrix.columns] if read_only else [col for col in [*static_disabled, *locked_period_columns] if col in group_matrix.columns],
                 read_only=read_only,
             )
-            group_results.append((group_name, result, group_matrix))
+            group_results.append((group_name, result, group_matrix, selected_driver_profile))
             st.markdown("**Model Impact**")
             impact_rows = []
-            for row_key in row_keys:
-                meta = DCF_ROW_METADATA.get(row_key)
-                if not meta:
-                    continue
-                affects = ", ".join(ASSUMPTION_METADATA.get(meta["explanation_key"], {}).get("affects", [])) or "DCF output and fair value"
-                impact_rows.append({"Assumption": meta["label"], "Affects": affects})
+            if group_name == "Key Drivers":
+                impact_rows = group_matrix[["Driver / Assumption", "Row Type", "Model Impact", "Source / Basis", "Manual Review Needed"]].head(18).to_dict("records")
+                template = get_driver_template(selected_driver_profile or "General")
+                with st.expander("Manual Review Plan", expanded=False):
+                    review_rows = [
+                        {
+                            "Driver": row.get("Driver / Assumption"),
+                            "Why it matters": row.get("Model Impact"),
+                            "Where to verify": row.get("Source / Basis"),
+                            "Suggested keywords": ", ".join(str(row.get("Driver / Assumption", "")).lower().replace("/", " ").split()[:4]),
+                            "Fallback used": "Driver template estimate" if row.get("Manual Review Needed") == "Yes" else "Linked model output",
+                            "Confidence impact": row.get("Confidence"),
+                            "Affected model lines": row.get("Model Impact"),
+                        }
+                        for _, row in group_matrix[group_matrix["Manual Review Needed"].eq("Yes")].head(12).iterrows()
+                    ]
+                    if template.get("manual_review_questions"):
+                        st.caption("Questions: " + " | ".join(template.get("manual_review_questions", [])[:4]))
+                    show_table(pd.DataFrame(review_rows), "No manual-review rows flagged for this profile.")
+            else:
+                for row_key in row_keys:
+                    meta = DCF_ROW_METADATA.get(row_key)
+                    if not meta:
+                        continue
+                    affects = ", ".join(ASSUMPTION_METADATA.get(meta["explanation_key"], {}).get("affects", [])) or "DCF output and fair value"
+                    impact_rows.append({"Assumption": meta["label"], "Affects": affects})
             show_table(pd.DataFrame(impact_rows), "No model impact notes available.")
     for warning in quality_warnings:
         st.warning(warning)
-    if any(result["reset_to_base"] for _name, result, _matrix in group_results) and scenario_scope == "User Case":
+    if any(result["reset_to_base"] for _name, result, _matrix, _driver_profile in group_results) and scenario_scope == "User Case":
         st.success("User Case reset to Base Case. Apply/save from the refreshed model state.")
         return dict(base)
     edited = dict(working)
     changes = []
     applied_any = False
-    for _group_name, result, group_matrix in group_results:
+    for _group_name, result, group_matrix, selected_driver_profile in group_results:
         if result["applied"]:
+            if _group_name == "Key Drivers" and selected_driver_profile:
+                edited = _apply_profile_driver_table(ctx, selected_driver_profile, result["committed"], edited, specs, scenario_scope)
             edited = _apply_assumption_matrix(edited, result["committed"], specs)
             changes.extend(handle_assumption_table_edit(result["committed"], group_matrix, DCF_ROW_METADATA, scenario_scope, period_columns))
             applied_any = True
@@ -4314,13 +4562,13 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
         new_fv = run_dcf(ctx["historicals"], market, edited).get("fair_value_per_share")
         delta = (new_fv / old_fv - 1) if old_fv not in (None, 0) and new_fv is not None else None
         st.success(f"Recalculated {scenario_scope} DCF. Fair value changed from {fmt_per_share(old_fv)} to {fmt_per_share(new_fv)}. Change: {fmt_percent(delta)}.")
-    elif any(result["discarded"] for _name, result, _matrix in group_results):
+    elif any(result["discarded"] for _name, result, _matrix, _driver_profile in group_results):
         st.info("Pending assumption edits discarded. Valuation remains on the committed assumptions.")
-    elif any(result["save_draft"] for _name, result, _matrix in group_results) or (valuation_result and valuation_result["save_draft"]):
+    elif any(result["save_draft"] for _name, result, _matrix, _driver_profile in group_results) or (valuation_result and valuation_result["save_draft"]):
         st.session_state["pa11r_draft_save_requested"] = True
         st.info("Draft is retained in session state. Use Save / Load Analysis to persist it.")
 
-    total_pending_count = sum(result["pending_count"] for _name, result, _matrix in group_results) + (valuation_result["pending_count"] if valuation_result else 0)
+    total_pending_count = sum(result["pending_count"] for _name, result, _matrix, _driver_profile in group_results) + (valuation_result["pending_count"] if valuation_result else 0)
     preview_toggle = st.toggle(
         "Preview dependent row changes before applying",
         value=False,
@@ -4329,7 +4577,9 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
     )
     if preview_toggle and total_pending_count:
         draft_assumptions = dict(working)
-        for _group_name, result, _group_matrix in group_results:
+        for _group_name, result, _group_matrix, selected_driver_profile in group_results:
+            if _group_name == "Key Drivers" and selected_driver_profile:
+                draft_assumptions = _apply_profile_driver_table(ctx, selected_driver_profile, result["draft"], draft_assumptions, specs, scenario_scope, persist=False)
             draft_assumptions = _apply_assumption_matrix(draft_assumptions, result["draft"], specs)
         if valuation_result:
             draft_assumptions = _apply_valuation_assumption_table(draft_assumptions, valuation_result["draft"])
