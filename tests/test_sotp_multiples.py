@@ -2,7 +2,7 @@ import pandas as pd
 
 from models.dcf_model import default_assumptions_from_historicals, run_dcf
 from models.multiples_model import build_multiples_table, calculate_current_multiples, calculate_scenario_implied_multiples, peer_median_multiples
-from models.sotp_model import VALUATION_METHODS, build_default_segment_data, run_reverse_sotp, run_sotp, run_sotp_scenarios
+from models.sotp_model import VALUATION_METHODS, build_default_segment_data, run_reverse_sotp, run_sotp, run_sotp_scenarios, sotp_timeframe_options
 
 
 def sample_historicals():
@@ -66,6 +66,26 @@ def test_sotp_supports_required_valuation_methods():
     required = {"EV/Revenue", "EV/EBITDA", "EV/EBIT", "EV/NOPAT", "EV/OCF", "EV/FCF", "P/E", "Manual Value"}
 
     assert required.issubset(set(VALUATION_METHODS))
+
+
+def test_sotp_timeframe_changes_metric_basis_and_output():
+    historicals = sample_historicals()
+    historicals.loc[0, "Period"] = "FY2025A"
+    market = {"price": 20.0, "market_cap": 2000.0, "enterprise_value": 2100.0, "shares_outstanding": 100.0}
+    assumptions = default_assumptions_from_historicals(historicals, market)
+    assumptions["revenue_cagr"] = 0.10
+    dcf = run_dcf(historicals, market, assumptions)
+    segments = build_default_segment_data(historicals, {"sector": "Technology"}, assumptions)
+
+    options = sotp_timeframe_options(historicals, dcf, assumptions)
+    latest = run_sotp(segments, market, assumptions, dcf_output=dcf, historicals=historicals, timeframe="Latest / LTM")
+    final_year = run_sotp(segments, market, assumptions, dcf_output=dcf, historicals=historicals, timeframe=options[-2])
+
+    assert "FY2026E" in options
+    assert "Normalized Year" in options
+    assert final_year["segments"]["Revenue"].iloc[0] > latest["segments"]["Revenue"].iloc[0]
+    assert final_year["fair_value_per_share"] != latest["fair_value_per_share"]
+    assert {"SOTP Timeframe", "Valuation Metric", "Metric Value", "Segment EV"}.issubset(final_year["segments"].columns)
 
 
 def test_multiples_table_uses_unavailable_safe_values_and_peer_fallbacks():

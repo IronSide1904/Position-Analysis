@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
 SOTP_SCENARIOS = ["Bear Case", "Base Case", "Bull Case", "User Case", "Market-Implied Case"]
 VALUATION_METHODS = ["EV/Revenue", "EV/EBITDA", "EV/EBIT", "EV/NOPAT", "EV/OCF", "EV/FCF", "P/E", "Manual Value"]
+NORMALIZED_BASIS_OPTIONS = ["Final forecast year", "Average of final 2 years", "Average of final 3 years", "Manual normalized year"]
 
 
 SECTOR_MULTIPLE_FALLBACKS = {
-    "technology": {"EV/Revenue": 5.0, "EV/EBITDA": 18.0, "EV/NOPAT": 24.0, "EV/OCF": 20.0, "EV/FCF": 22.0},
-    "healthcare": {"EV/Revenue": 4.0, "EV/EBITDA": 15.0, "EV/NOPAT": 22.0, "EV/OCF": 18.0, "EV/FCF": 20.0},
-    "industrials": {"EV/Revenue": 2.0, "EV/EBITDA": 11.0, "EV/NOPAT": 16.0, "EV/OCF": 14.0, "EV/FCF": 16.0},
-    "consumer cyclical": {"EV/Revenue": 1.6, "EV/EBITDA": 10.0, "EV/NOPAT": 15.0, "EV/OCF": 13.0, "EV/FCF": 15.0},
-    "default": {"EV/Revenue": 2.5, "EV/EBITDA": 12.0, "EV/NOPAT": 18.0, "EV/OCF": 16.0, "EV/FCF": 18.0},
+    "technology": {"EV/Revenue": 5.0, "EV/EBITDA": 18.0, "EV/EBIT": 20.0, "EV/NOPAT": 24.0, "EV/OCF": 20.0, "EV/FCF": 22.0, "P/E": 24.0},
+    "healthcare": {"EV/Revenue": 4.0, "EV/EBITDA": 15.0, "EV/EBIT": 18.0, "EV/NOPAT": 22.0, "EV/OCF": 18.0, "EV/FCF": 20.0, "P/E": 22.0},
+    "industrials": {"EV/Revenue": 2.0, "EV/EBITDA": 11.0, "EV/EBIT": 14.0, "EV/NOPAT": 16.0, "EV/OCF": 14.0, "EV/FCF": 16.0, "P/E": 16.0},
+    "consumer cyclical": {"EV/Revenue": 1.6, "EV/EBITDA": 10.0, "EV/EBIT": 13.0, "EV/NOPAT": 15.0, "EV/OCF": 13.0, "EV/FCF": 15.0, "P/E": 15.0},
+    "default": {"EV/Revenue": 2.5, "EV/EBITDA": 12.0, "EV/EBIT": 15.0, "EV/NOPAT": 18.0, "EV/OCF": 16.0, "EV/FCF": 18.0, "P/E": 18.0},
 }
 
 
@@ -101,6 +104,238 @@ def peer_multiple_for_method(peer_multiples: pd.DataFrame | dict | None, method:
                 if not series.empty:
                     return float(series.median())
     return _sector_fallback(sector).get(method)
+
+
+def _latest_model_year(historicals: pd.DataFrame | None) -> int | None:
+    if historicals is None or historicals.empty or "Period" not in historicals:
+        return None
+    for period in reversed(historicals["Period"].dropna().astype(str).tolist()):
+        match = re.search(r"(20\d{2}|19\d{2})", period)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _forecast_label(historicals: pd.DataFrame | None, year: int) -> str:
+    latest_year = _latest_model_year(historicals)
+    if latest_year:
+        return f"FY{latest_year + int(year)}{'E' if int(year) == 1 else 'F'}"
+    return f"FY{int(year)}{'E' if int(year) == 1 else 'F'}"
+
+
+def _actual_label(period: str) -> str:
+    text = str(period or "").strip()
+    if not text:
+        return "Latest / LTM"
+    if "ltm" in text.lower() or "latest" in text.lower():
+        return "Latest / LTM"
+    match = re.search(r"(20\d{2}|19\d{2})", text)
+    if match:
+        suffix = "A" if not re.search(r"[AEF]$", text.strip(), re.IGNORECASE) else text.strip()[-1].upper()
+        return f"FY{match.group(1)}{suffix}"
+    return text
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out = []
+    seen = set()
+    for value in values:
+        if value and value not in seen:
+            out.append(value)
+            seen.add(value)
+    return out
+
+
+def sotp_timeframe_options(historicals: pd.DataFrame | None = None, dcf_output: dict | None = None, assumptions: dict | None = None) -> list[str]:
+    options = ["Latest / LTM"]
+    if historicals is not None and not historicals.empty and "Period" in historicals:
+        actuals = [_actual_label(period) for period in historicals["Period"].dropna().astype(str).tolist()]
+        options.extend([label for label in actuals[-4:] if label != "Latest / LTM"])
+    forecast = (dcf_output or {}).get("forecast_table", pd.DataFrame())
+    if forecast is not None and not forecast.empty and "Year" in forecast:
+        for year in pd.to_numeric(forecast["Year"], errors="coerce").dropna().astype(int).tolist():
+            options.append(_forecast_label(historicals, year))
+        options.append("Terminal Year")
+    elif assumptions:
+        for year in range(1, int(assumptions.get("forecast_years", 5) or 5) + 1):
+            options.append(_forecast_label(historicals, year))
+        options.append("Terminal Year")
+    options.append("Normalized Year")
+    return _dedupe(options)
+
+
+def _forecast_lookup(historicals: pd.DataFrame | None, forecast: pd.DataFrame | None) -> dict[str, pd.Series]:
+    lookup: dict[str, pd.Series] = {}
+    if forecast is None or forecast.empty or "Year" not in forecast:
+        return lookup
+    for _, row in forecast.iterrows():
+        year = _safe_float(row.get("Year"))
+        if year is None:
+            continue
+        lookup[_forecast_label(historicals, int(year))] = row
+    return lookup
+
+
+def _latest_actual_row(historicals: pd.DataFrame | None) -> pd.Series | None:
+    if historicals is None or historicals.empty:
+        return None
+    return historicals.iloc[-1]
+
+
+def _actual_lookup(historicals: pd.DataFrame | None) -> dict[str, pd.Series]:
+    lookup: dict[str, pd.Series] = {}
+    if historicals is None or historicals.empty or "Period" not in historicals:
+        return lookup
+    for _, row in historicals.iterrows():
+        lookup[_actual_label(str(row.get("Period") or ""))] = row
+    latest = _latest_actual_row(historicals)
+    if latest is not None:
+        lookup["Latest / LTM"] = latest
+    return lookup
+
+
+def _mean_row(rows: list[pd.Series]) -> pd.Series | None:
+    if not rows:
+        return None
+    frame = pd.DataFrame(rows)
+    numeric = frame.apply(pd.to_numeric, errors="coerce")
+    averaged = numeric.mean(axis=0, skipna=True)
+    for column in frame.columns:
+        if column not in averaged or pd.isna(averaged.get(column)):
+            averaged[column] = frame[column].dropna().iloc[-1] if not frame[column].dropna().empty else None
+    return averaged
+
+
+def _timeframe_row(
+    historicals: pd.DataFrame | None,
+    dcf_output: dict | None,
+    timeframe: str | None,
+    normalized_basis: str = "Final forecast year",
+    normalized_timeframe: str | None = None,
+) -> tuple[pd.Series | None, str, str]:
+    forecast = (dcf_output or {}).get("forecast_table", pd.DataFrame())
+    forecast_lookup = _forecast_lookup(historicals, forecast)
+    actual_lookup = _actual_lookup(historicals)
+    options = sotp_timeframe_options(historicals, dcf_output)
+    selected = timeframe if timeframe in options else ("Normalized Year" if "Normalized Year" in options else options[-1])
+    basis = f"Segment/product financials from {selected}"
+    if selected == "Normalized Year":
+        if normalized_basis == "Manual normalized year" and normalized_timeframe in forecast_lookup:
+            return forecast_lookup[normalized_timeframe], selected, f"Manual normalized year: {normalized_timeframe}"
+        forecast_rows = list(forecast_lookup.values())
+        if not forecast_rows:
+            return actual_lookup.get("Latest / LTM"), selected, "Normalized Year fallback: Latest / LTM"
+        if normalized_basis == "Average of final 3 years":
+            return _mean_row(forecast_rows[-3:]), selected, "Average of final 3 forecast years"
+        if normalized_basis == "Average of final 2 years":
+            return _mean_row(forecast_rows[-2:]), selected, "Average of final 2 forecast years"
+        return forecast_rows[-1], selected, "Final forecast year"
+    if selected == "Terminal Year":
+        if forecast_lookup:
+            return list(forecast_lookup.values())[-1], selected, "Terminal Year uses final forecast year operating metrics"
+        return actual_lookup.get("Latest / LTM"), selected, "Terminal Year fallback: Latest / LTM"
+    if selected in forecast_lookup:
+        return forecast_lookup[selected], selected, basis
+    if selected in actual_lookup:
+        return actual_lookup[selected], selected, basis
+    return actual_lookup.get("Latest / LTM"), selected, "Selected timeframe unavailable; using Latest / LTM"
+
+
+def _row_financials(row: pd.Series | None, assumptions: dict | None = None) -> dict:
+    assumptions = assumptions or {}
+    if row is None:
+        return {}
+    revenue = _safe_float(row.get("Revenue"))
+    gross_margin = _safe_float(row.get("Gross Margin"), assumptions.get("gross_margin", 0.45))
+    opex_pct = _safe_float(row.get("OPEX % Revenue"), assumptions.get("opex_pct_revenue"))
+    if opex_pct is None and revenue:
+        opex = _safe_float(row.get("OPEX"))
+        opex_pct = _safe_div(abs(opex), revenue) if opex is not None else None
+    if opex_pct is None and gross_margin is not None:
+        opex_pct = max(float(gross_margin) - float(assumptions.get("operating_margin", 0.15) or 0.15), 0.0)
+    capex_pct = _safe_float(row.get("Total CAPEX % Revenue"), _safe_float(row.get("CAPEX % Revenue")))
+    if capex_pct is None and revenue:
+        capex_pct = _safe_div(abs(_safe_float(row.get("CAPEX")) or _safe_float(row.get("Total CAPEX")) or 0.0), revenue)
+    ocf_margin = _safe_float(row.get("OCF Margin")) or _safe_div(row.get("OCF"), revenue) or assumptions.get("ocf_margin", 0.16)
+    nopat_margin = _safe_float(row.get("NOPAT Margin")) or _safe_div(row.get("NOPAT"), revenue) or assumptions.get("nopat_margin", 0.12)
+    return {
+        "Revenue": revenue,
+        "Gross Margin": gross_margin,
+        "OPEX % Revenue": opex_pct,
+        "OCF Margin": ocf_margin,
+        "NOPAT Margin": nopat_margin,
+        "CAPEX % Revenue": capex_pct,
+        "D&A % Revenue": _safe_float(row.get("D&A % Revenue"), capex_pct),
+    }
+
+
+def _manual_period_value(row: pd.Series, timeframe: str, metric: str) -> float | None:
+    candidates = [
+        f"{timeframe} {metric}",
+        f"{metric} {timeframe}",
+        f"{timeframe} {metric} ($B)",
+        f"{metric} {timeframe} ($B)",
+    ]
+    for column in candidates:
+        if column in row and row.get(column) is not None:
+            value = _safe_float(row.get(column))
+            if value is not None:
+                return value * 1e9 if "($B)" in column else value
+    return None
+
+
+def apply_sotp_timeframe(
+    segment_data: pd.DataFrame | None,
+    historicals: pd.DataFrame | None = None,
+    dcf_output: dict | None = None,
+    assumptions: dict | None = None,
+    timeframe: str | None = "Normalized Year",
+    normalized_basis: str = "Final forecast year",
+    normalized_timeframe: str | None = None,
+) -> tuple[pd.DataFrame, dict]:
+    assumptions = assumptions or {}
+    segments = normalize_segment_table(segment_data, assumptions)
+    row, selected, basis = _timeframe_row(historicals, dcf_output, timeframe, normalized_basis, normalized_timeframe)
+    period_financials = _row_financials(row, assumptions)
+    context = {
+        "timeframe": selected,
+        "basis": basis,
+        "available_timeframes": sotp_timeframe_options(historicals, dcf_output, assumptions),
+        "warnings": [],
+    }
+    if segments.empty:
+        return segments, context
+    base_total = pd.to_numeric(segments["Revenue"], errors="coerce").fillna(0).sum()
+    period_revenue = period_financials.get("Revenue")
+    if period_revenue is None:
+        context["warnings"].append(f"SOTP timeframe unavailable for {selected}: consolidated revenue is missing. Using current segment revenue.")
+        return segments, context
+    latest_revenue = _row_financials(_latest_actual_row(historicals), assumptions).get("Revenue") or base_total
+    latest_margin_context = _row_financials(_latest_actual_row(historicals), assumptions)
+    for idx, raw in segments.iterrows():
+        manual_revenue = _manual_period_value(raw, selected, "Revenue")
+        if manual_revenue is not None:
+            segments.at[idx, "Revenue"] = max(manual_revenue, 0.0)
+        elif base_total:
+            share = (_safe_float(raw.get("Revenue"), 0.0) or 0.0) / base_total
+            segments.at[idx, "Revenue"] = max(period_revenue * share, 0.0)
+        elif latest_revenue:
+            scale = period_revenue / latest_revenue
+            segments.at[idx, "Revenue"] = max((_safe_float(raw.get("Revenue"), 0.0) or 0.0) * scale, 0.0)
+        for column in ["Gross Margin", "OPEX % Revenue", "OCF Margin", "NOPAT Margin", "CAPEX % Revenue"]:
+            period_value = period_financials.get(column)
+            latest_value = latest_margin_context.get(column)
+            if period_value is None or latest_value is None:
+                continue
+            current = _safe_float(raw.get(column))
+            if current is None:
+                segments.at[idx, column] = period_value
+            else:
+                if column == "CAPEX % Revenue":
+                    segments.at[idx, column] = max(current + (period_value - latest_value), 0.0)
+                else:
+                    segments.at[idx, column] = float(np.clip(current + (period_value - latest_value), -1.0, 1.0))
+    return segments, context
 
 
 def build_default_segment_data(
@@ -242,10 +477,21 @@ def normalize_segment_table(segment_data: pd.DataFrame | None, assumptions: dict
             frame[column] = default
         frame[column] = frame[column].fillna(default)
     frame["Valuation Method"] = frame["Valuation Method"].where(frame["Valuation Method"].isin(VALUATION_METHODS), "EV/NOPAT")
-    return frame[list(defaults.keys())]
+    extra_columns = [
+        column
+        for column in frame.columns
+        if column not in defaults
+        and (
+            re.match(r"^(FY\d{4}[AEF]|Latest / LTM|Terminal Year|Normalized Year) Revenue$", str(column))
+            or re.match(r"^(FY\d{4}[AEF]|Latest / LTM|Terminal Year|Normalized Year) Manual Segment Value$", str(column))
+            or re.match(r"^FY\d+[AEF] Revenue$", str(column))
+            or re.match(r"^FY\d+[AEF] Manual Segment Value$", str(column))
+        )
+    ]
+    return frame[[*list(defaults.keys()), *extra_columns]]
 
 
-def _segment_basis(row: pd.Series, method: str) -> float:
+def _segment_metric(row: pd.Series, method: str) -> tuple[str, float | None]:
     revenue = _safe_float(row.get("Revenue"), 0.0) or 0.0
     gross_margin = _safe_float(row.get("Gross Margin"), 0.45) or 0.45
     opex_ratio = _safe_float(row.get("OPEX % Revenue"), 0.30) or 0.30
@@ -254,22 +500,27 @@ def _segment_basis(row: pd.Series, method: str) -> float:
     capex_ratio = abs(_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03)
     ebit = revenue * max(gross_margin - opex_ratio, 0.0)
     if method == "EV/Revenue":
-        return revenue
+        return "Revenue", revenue
     if method == "EV/EBITDA":
-        return revenue * max(gross_margin - opex_ratio + capex_ratio, 0.0)
+        return "EBITDA", revenue * max(gross_margin - opex_ratio + capex_ratio, 0.0)
     if method == "EV/EBIT":
-        return ebit
+        return "EBIT", ebit
     if method == "EV/NOPAT":
-        return revenue * max(nopat_margin, 0.0)
+        return "NOPAT", revenue * max(nopat_margin, 0.0)
     if method == "EV/OCF":
-        return revenue * max(ocf_margin, 0.0)
+        return "OCF", revenue * max(ocf_margin, 0.0)
     if method == "EV/FCF":
-        return revenue * max(ocf_margin - capex_ratio, 0.0)
+        return "FCF", revenue * max(ocf_margin - capex_ratio, 0.0)
     if method == "P/E":
-        return revenue * max(nopat_margin, 0.0)
+        return "Net Income / NOPAT", revenue * max(nopat_margin, 0.0)
     if method == "Manual Value":
-        return 1.0
-    return revenue * max(nopat_margin, 0.0)
+        return "Manual Value", _safe_float(row.get("Manual Segment Value"), 0.0)
+    return "NOPAT", revenue * max(nopat_margin, 0.0)
+
+
+def _segment_basis(row: pd.Series, method: str) -> float:
+    _metric, value = _segment_metric(row, method)
+    return _safe_float(value, 0.0) or 0.0
 
 
 def _net_debt(market_data: dict | None, assumptions: dict | None) -> float:
@@ -320,6 +571,10 @@ def run_sotp(
     dcf_output: dict | None = None,
     peer_multiples: pd.DataFrame | dict | None = None,
     sector: str | None = None,
+    historicals: pd.DataFrame | None = None,
+    timeframe: str | None = "Normalized Year",
+    normalized_basis: str = "Final forecast year",
+    normalized_timeframe: str | None = None,
 ) -> dict:
     """
     Segment-level valuation model. Backward compatible with the old call shape:
@@ -330,11 +585,23 @@ def run_sotp(
         market_data = {}
     market_data = market_data or {}
     assumptions = assumptions or {}
-    segment_data = normalize_segment_table(segment_data, assumptions)
+    segment_data, timeframe_context = apply_sotp_timeframe(
+        segment_data,
+        historicals=historicals,
+        dcf_output=dcf_output,
+        assumptions=assumptions,
+        timeframe=timeframe,
+        normalized_basis=normalized_basis,
+        normalized_timeframe=normalized_timeframe,
+    )
     if segment_data.empty:
         return {
             "available": False,
             "scenario": scenario,
+            "timeframe": timeframe_context.get("timeframe"),
+            "timeframe_basis": timeframe_context.get("basis"),
+            "normalized_basis": normalized_basis,
+            "available_timeframes": timeframe_context.get("available_timeframes", []),
             "segments": pd.DataFrame(),
             "segment_table": pd.DataFrame(),
             "enterprise_value": None,
@@ -344,7 +611,7 @@ def run_sotp(
             "upside_downside_pct": None,
             "sotp_vs_dcf_gap_pct": None,
             "whole_vs_sum_interpretation": "Segment data unavailable from filings. Use the manual segment builder.",
-            "warnings": ["Segment data unavailable from filings. Manual segment builder is active."],
+            "warnings": ["Segment data unavailable from filings. Manual segment builder is active.", *timeframe_context.get("warnings", [])],
             "summary": "Manual segment assumptions required; SEC segment data is unavailable.",
         }
     adjustments = _scenario_adjustments(scenario)
@@ -353,12 +620,23 @@ def run_sotp(
     warnings = []
     reverse = None
     if scenario == "Market-Implied Case":
-        reverse = run_reverse_sotp(market_data, segment_data, assumptions, peer_multiples)
+        reverse = run_reverse_sotp(
+            market_data,
+            segment_data,
+            assumptions,
+            peer_multiples,
+            historicals=historicals,
+            dcf_output=dcf_output,
+            timeframe=timeframe_context.get("timeframe"),
+            normalized_basis=normalized_basis,
+            normalized_timeframe=normalized_timeframe,
+        )
     for _, raw in segment_data.iterrows():
         row = raw.copy()
         method = str(row.get("Valuation Method") or "EV/NOPAT")
-        revenue = (_safe_float(row.get("Revenue"), 0.0) or 0.0) * (1 + (_safe_float(row.get("Revenue Growth"), 0.0) or 0.0) + adjustments.get("growth", 0.0))
+        revenue = (_safe_float(row.get("Revenue"), 0.0) or 0.0) * (1 + adjustments.get("growth", 0.0))
         row["Revenue"] = max(revenue, 0.0)
+        row["Revenue Growth"] = (_safe_float(row.get("Revenue Growth"), 0.0) or 0.0) + adjustments.get("growth", 0.0)
         row["OCF Margin"] = max((_safe_float(row.get("OCF Margin"), 0.16) or 0.16) + adjustments.get("margin", 0.0), 0.0)
         row["NOPAT Margin"] = max((_safe_float(row.get("NOPAT Margin"), 0.12) or 0.12) + adjustments.get("margin", 0.0), 0.0)
         row["CAPEX % Revenue"] = max((_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03) + adjustments.get("capex", 0.0), 0.0)
@@ -379,30 +657,43 @@ def run_sotp(
                 if market_implied_multiple is not None:
                     selected_multiple = market_implied_multiple
         discount = (_safe_float(row.get("Discount / Premium"), 0.0) or 0.0) + adjustments.get("discount", 0.0)
-        basis = _segment_basis(row, method)
+        valuation_metric, metric_value = _segment_metric(row, method)
+        basis = _safe_float(metric_value, 0.0) or 0.0
         if method == "Manual Value":
             segment_ev = _safe_float(row.get("Manual Segment Value"), 0.0) or 0.0
         else:
             segment_ev = basis * selected_multiple * (1 + discount)
+            if basis <= 0:
+                warnings.append(f"{row.get('Segment')}: {timeframe_context.get('timeframe')} {valuation_metric} is unavailable or non-positive. Choose another metric or add manual assumptions.")
         if method == "EV/Revenue" and (row.get("NOPAT Margin") is None or float(row.get("NOPAT Margin") or 0) <= 0):
             warnings.append(f"{row.get('Segment')}: EV/Revenue used because profit basis is unavailable or negative; review margin normalization.")
+        gross_profit = row.get("Revenue") * (_safe_float(row.get("Gross Margin"), 0.45) or 0.45)
+        ebit = row.get("Revenue") * max((_safe_float(row.get("Gross Margin"), 0.45) or 0.45) - (_safe_float(row.get("OPEX % Revenue"), 0.30) or 0.30), 0.0)
+        capex = row.get("Revenue") * abs(_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03)
+        ebitda = row.get("Revenue") * max((_safe_float(row.get("Gross Margin"), 0.45) or 0.45) - (_safe_float(row.get("OPEX % Revenue"), 0.30) or 0.30) + abs(_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03), 0.0)
         total_ev += segment_ev
         rows.append(
             {
                 "Segment": row.get("Segment"),
+                "SOTP Timeframe": timeframe_context.get("timeframe"),
+                "Valuation Metric": valuation_metric,
+                "Metric Value": metric_value,
                 "Revenue": row.get("Revenue"),
                 "Revenue Growth": row.get("Revenue Growth"),
                 "Gross Margin": row.get("Gross Margin"),
+                "Gross Profit": gross_profit,
                 "OPEX % Revenue": row.get("OPEX % Revenue"),
+                "EBITDA": ebitda,
                 "OCF Margin": row.get("OCF Margin"),
                 "NOPAT Margin": row.get("NOPAT Margin"),
                 "CAPEX % Revenue": row.get("CAPEX % Revenue"),
+                "CAPEX": capex,
                 "Valuation Method": method,
                 "Selected Multiple": selected_multiple,
                 "Peer Multiple": peer_multiple,
                 "Market-Implied Multiple": market_implied_multiple,
                 "Manual Segment Value": row.get("Manual Segment Value"),
-                "EBIT": row.get("Revenue") * max((_safe_float(row.get("Gross Margin"), 0.45) or 0.45) - (_safe_float(row.get("OPEX % Revenue"), 0.30) or 0.30), 0.0),
+                "EBIT": ebit,
                 "NOPAT": row.get("Revenue") * max((_safe_float(row.get("NOPAT Margin"), 0.12) or 0.12), 0.0),
                 "OCF": row.get("Revenue") * max((_safe_float(row.get("OCF Margin"), 0.16) or 0.16), 0.0),
                 "FCF": row.get("Revenue") * max((_safe_float(row.get("OCF Margin"), 0.16) or 0.16) - abs(_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03), 0.0),
@@ -429,6 +720,10 @@ def run_sotp(
     return {
         "available": True,
         "scenario": scenario,
+        "timeframe": timeframe_context.get("timeframe"),
+        "timeframe_basis": timeframe_context.get("basis"),
+        "normalized_basis": normalized_basis,
+        "available_timeframes": timeframe_context.get("available_timeframes", []),
         "segments": segments,
         "segment_table": segments,
         "enterprise_value": total_ev,
@@ -442,8 +737,8 @@ def run_sotp(
         "current_market_ev": market_ev,
         "whole_vs_sum": conclusion,
         "whole_vs_sum_interpretation": interpretation,
-        "warnings": list(dict.fromkeys(warnings)),
-        "summary": f"{scenario}: {conclusion}. {interpretation}",
+        "warnings": list(dict.fromkeys([*warnings, *timeframe_context.get("warnings", [])])),
+        "summary": f"{scenario} {timeframe_context.get('timeframe')}: {conclusion}. {interpretation}",
     }
 
 
@@ -466,9 +761,25 @@ def run_sotp_scenarios(
     dcf_output: dict | None = None,
     peer_multiples: pd.DataFrame | dict | None = None,
     sector: str | None = None,
+    historicals: pd.DataFrame | None = None,
+    timeframe: str | None = "Normalized Year",
+    normalized_basis: str = "Final forecast year",
+    normalized_timeframe: str | None = None,
 ) -> dict[str, dict]:
     return {
-        scenario: run_sotp(segment_data, market_data, assumptions, scenario, dcf_output, peer_multiples, sector)
+        scenario: run_sotp(
+            segment_data,
+            market_data,
+            assumptions,
+            scenario,
+            dcf_output,
+            peer_multiples,
+            sector,
+            historicals=historicals,
+            timeframe=timeframe,
+            normalized_basis=normalized_basis,
+            normalized_timeframe=normalized_timeframe,
+        )
         for scenario in SOTP_SCENARIOS
     }
 
@@ -479,6 +790,7 @@ def sotp_summary_table(scenarios: dict[str, dict]) -> pd.DataFrame:
         rows.append(
             {
                 "Scenario": scenario,
+                "Timeframe": result.get("timeframe"),
                 "SOTP EV": result.get("enterprise_value"),
                 "Equity Value": result.get("equity_value"),
                 "Fair Value / Share": result.get("fair_value_per_share"),
@@ -496,16 +808,30 @@ def run_reverse_sotp(
     segment_data: pd.DataFrame,
     base_segment_assumptions: dict,
     peer_multiples: pd.DataFrame | dict | None = None,
+    historicals: pd.DataFrame | None = None,
+    dcf_output: dict | None = None,
+    timeframe: str | None = "Normalized Year",
+    normalized_basis: str = "Final forecast year",
+    normalized_timeframe: str | None = None,
 ) -> dict:
     """
     Estimate segment values or multiples implied by the current enterprise value.
 
     This is an allocation model, not a reported fact.
     """
-    segments = normalize_segment_table(segment_data, base_segment_assumptions)
+    segments, timeframe_context = apply_sotp_timeframe(
+        segment_data,
+        historicals=historicals,
+        dcf_output=dcf_output,
+        assumptions=base_segment_assumptions,
+        timeframe=timeframe,
+        normalized_basis=normalized_basis,
+        normalized_timeframe=normalized_timeframe,
+    )
     if segments.empty:
         return {
             "available": False,
+            "timeframe": timeframe_context.get("timeframe"),
             "segments": pd.DataFrame(),
             "enterprise_value": None,
             "warning": "Market-implied SOTP unavailable because segment data is missing.",
@@ -546,6 +872,7 @@ def run_reverse_sotp(
         rows.append(
             {
                 "Segment": row.get("Segment"),
+                "SOTP Timeframe": timeframe_context.get("timeframe"),
                 "Revenue": revenue,
                 "Revenue Share": revenue_share,
                 "Profit Share": profit_share,
@@ -562,6 +889,7 @@ def run_reverse_sotp(
         )
     return {
         "available": True,
+        "timeframe": timeframe_context.get("timeframe"),
         "enterprise_value": market_ev,
         "segments": pd.DataFrame(rows),
         "warning": "Market-implied SOTP is an allocation model, not a reported fact. Use it to understand what expectations the current stock price may already reflect.",

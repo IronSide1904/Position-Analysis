@@ -257,6 +257,19 @@ def dcf_vs_sotp_chart(summary_table: pd.DataFrame):
     return fig
 
 
+def sotp_fair_value_by_timeframe_chart(timeframe_table: pd.DataFrame):
+    if timeframe_table is None or timeframe_table.empty or {"Timeframe", "Fair Value / Share"}.difference(timeframe_table.columns):
+        return empty_chart("SOTP fair value by timeframe unavailable.")
+    frame = timeframe_table.dropna(subset=["Fair Value / Share"]).copy()
+    if frame.empty:
+        return empty_chart("SOTP fair value by timeframe unavailable.")
+    fig = px.line(frame, x="Timeframe", y="Fair Value / Share", markers=True, title="SOTP Fair Value by Timeframe")
+    fig.update_yaxes(title="SOTP Fair Value / Share", tickprefix="$", separatethousands=True)
+    fig.update_xaxes(title="SOTP Valuation Timeframe", automargin=True)
+    fig.update_layout(margin=dict(l=10, r=10, t=50, b=70), height=380)
+    return fig
+
+
 def scenario_multiple_vs_peer_chart(multiples_table: pd.DataFrame, selected_multiple: str):
     if multiples_table is None or multiples_table.empty:
         return empty_chart("Scenario multiples unavailable.")

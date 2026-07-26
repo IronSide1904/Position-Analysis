@@ -6038,7 +6038,21 @@ def collect_dashboard_state(ctx: dict) -> dict:
     dcf_scenarios = scenario_state.model_outputs.get("scenario_assumptions", {})
     dcf_outputs = scenario_state.model_outputs.get("scenario_outputs", {})
     sotp_segments = _current_sotp_segments(ctx)
-    sotp_outputs = run_sotp_scenarios(sotp_segments, market, user_assumptions, dcf_outputs.get("User Case"), ctx.get("peer_df"), dataset.get("sector"))
+    sotp_timeframe = st.session_state.get(f"sotp_{ticker}_selected_timeframe", "Normalized Year")
+    sotp_normalized_basis = st.session_state.get(f"sotp_{ticker}_normalized_basis", "Final forecast year")
+    sotp_normalized_timeframe = st.session_state.get(f"sotp_{ticker}_normalized_timeframe")
+    sotp_outputs = run_sotp_scenarios(
+        sotp_segments,
+        market,
+        user_assumptions,
+        dcf_outputs.get("User Case"),
+        ctx.get("peer_df"),
+        dataset.get("sector"),
+        historicals=ctx.get("historicals"),
+        timeframe=sotp_timeframe,
+        normalized_basis=sotp_normalized_basis,
+        normalized_timeframe=sotp_normalized_timeframe,
+    )
     multiples_basis = st.session_state.get("pa11r_multiples_basis", "Normalized Year")
     scenario_multiples = calculate_scenario_implied_multiples(dcf_outputs, ctx.get("historicals"), market, multiples_basis)
     peer_medians, _warnings = peer_median_multiples(ctx.get("peer_df"), dataset.get("sector"), dataset.get("industry"))
@@ -6070,9 +6084,17 @@ def collect_dashboard_state(ctx: dict) -> dict:
         },
         "sotp": {
             "enabled": True,
+            "selected_scenario": st.session_state.get("pa11r_main_sotp_scenario", "User Case"),
+            "selected_timeframe": sotp_timeframe,
+            "normalized_basis": sotp_normalized_basis,
+            "normalized_timeframe": sotp_normalized_timeframe,
             "segment_assumptions": {"User Case": sotp_segments},
+            "segment_assumptions_by_timeframe": {},
+            "segment_values_by_timeframe": {},
+            "selected_multiples": {},
             "scenario_outputs": sotp_outputs,
             "manual_segments": sotp_segments,
+            "sotp_outputs": sotp_outputs,
             "whole_vs_sum_conclusion": sotp_outputs.get("Base Case", {}).get("whole_vs_sum_interpretation", ""),
         },
         "multiples": {
@@ -6145,6 +6167,13 @@ def restore_analysis_to_session_state(payload: dict, use_saved_market_snapshot: 
     manual_segments = payload.get("sotp", {}).get("manual_segments", [])
     if ticker and manual_segments:
         st.session_state[f"sotp_{ticker}_segments"] = pd.DataFrame(manual_segments)
+    sotp_payload = payload.get("sotp", {}) or {}
+    if ticker and sotp_payload.get("selected_timeframe"):
+        st.session_state[f"sotp_{ticker}_selected_timeframe"] = sotp_payload.get("selected_timeframe")
+    if ticker and sotp_payload.get("normalized_basis"):
+        st.session_state[f"sotp_{ticker}_normalized_basis"] = sotp_payload.get("normalized_basis")
+    if ticker and sotp_payload.get("normalized_timeframe"):
+        st.session_state[f"sotp_{ticker}_normalized_timeframe"] = sotp_payload.get("normalized_timeframe")
     multiples = payload.get("multiples", {})
     if multiples.get("selected_multiple_basis"):
         st.session_state["pa11r_multiples_basis"] = multiples.get("selected_multiple_basis")
