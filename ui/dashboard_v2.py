@@ -3524,6 +3524,248 @@ ECONOMIC_ENGINE_COPY = {
 }
 
 
+PRODUCT_SERVICE_LINE_LIBRARY = {
+    "AAPL": [
+        ("Product Revenue", "iPhone", "iPhone revenue", "Revenue / Gross Profit", "10-K product revenue table; MD&A net sales by category", "iphone revenue, net sales iphone"),
+        ("Product Volume", "iPhone", "iPhone units / upgrade cycle", "Revenue", "Company commentary, channel checks, third-party shipment estimates", "iphone units, upgrade cycle, shipments"),
+        ("Pricing", "iPhone", "iPhone ASP", "Revenue / Margin", "Calculated from revenue divided by units if units are available", "iphone asp, average selling price"),
+        ("Product Revenue", "Mac", "Mac revenue / units / ASP", "Revenue / Gross Profit", "10-K product revenue table and MD&A category discussion", "mac revenue, mac units, mac asp"),
+        ("Product Revenue", "iPad", "iPad revenue / units", "Revenue / Gross Profit", "10-K product revenue table and MD&A category discussion", "ipad revenue, ipad units"),
+        ("Product Revenue", "Wearables, Home and Accessories", "Watch / AirPods / accessories demand", "Revenue / Gross Profit", "10-K product revenue table; product launch commentary", "wearables home accessories revenue, watch airpods"),
+        ("Services", "App Store", "App Store monetization / take rate", "Services Revenue / Margin / Terminal Multiple", "Services disclosure, regulatory filings, developer ecosystem commentary", "app store revenue, take rate, services"),
+        ("Services", "iCloud / AppleCare / Payments", "Subscriptions and payments revenue", "Services Revenue / OCF", "Services disclosure and installed-base commentary", "icloud subscriptions, applecare, apple pay"),
+        ("Installed Base", "Active devices", "Services revenue per installed device", "Revenue Durability / Terminal Multiple", "Installed base commentary and services ARPU bridge", "installed base, active devices, services arpu"),
+        ("Margin", "Products vs Services", "Products gross margin / Services gross margin", "Gross Profit / EBIT / FCF", "Segment gross margin disclosure where available", "products gross margin, services gross margin"),
+        ("Capital Allocation", "Buybacks", "Diluted shares / repurchases", "Fair Value / Share", "Cash-flow statement and diluted share count", "repurchases, diluted shares, buybacks"),
+    ],
+    "MSFT": [
+        ("Cloud", "Azure", "Azure revenue growth / consumption", "Revenue / Gross Profit / Terminal Multiple", "Segment reporting, MD&A cloud commentary, RPO", "azure revenue growth, cloud consumption"),
+        ("Software", "Microsoft 365 / Office", "Seats, ARPU, renewal and price", "Revenue / OCF", "Productivity segment disclosure and commercial bookings", "microsoft 365 seats, office arpu, renewal"),
+        ("Platform", "Windows / Devices", "OEM and device cycle", "Revenue / Margin", "More Personal Computing segment disclosure", "windows oem, devices revenue"),
+        ("Professional Network", "LinkedIn", "LinkedIn ads and subscriptions", "Revenue / Margin", "Segment discussion and LinkedIn growth commentary", "linkedin revenue, ads subscriptions"),
+        ("Gaming", "Xbox / Activision", "Gaming content, hardware, services", "Revenue / OPEX / CAPEX", "Gaming segment commentary and acquisition disclosures", "gaming revenue, xbox, activision"),
+        ("Margin", "Cloud gross margin", "Cloud gross margin / AI infrastructure cost", "Gross Profit / FCF", "Cost of revenue and cloud infrastructure commentary", "cloud gross margin, ai infrastructure capex"),
+        ("Capital Allocation", "SBC / Buybacks", "SBC dilution and repurchases", "Fair Value / Share", "Cash-flow statement and share count", "sbc, repurchases, diluted shares"),
+    ],
+    "AMZN": [
+        ("Marketplace", "Online stores", "Online store revenue / unit volume", "Revenue / Gross Profit", "Segment and revenue disaggregation disclosure", "online stores revenue, unit sales"),
+        ("Marketplace", "Third-party seller services", "Seller services revenue / take rate", "Revenue / Margin", "Revenue disaggregation and marketplace commentary", "third-party seller services, take rate"),
+        ("Cloud", "AWS", "AWS revenue growth / usage / margin", "Revenue / EBIT / Terminal Multiple", "AWS segment disclosure and backlog commentary", "aws revenue, aws margin, cloud usage"),
+        ("Advertising", "Advertising services", "Advertising revenue / monetization", "Revenue / Margin", "Revenue disaggregation and ad services commentary", "advertising services revenue"),
+        ("Subscriptions", "Prime / subscriptions", "Subscription revenue / retention", "Revenue / OCF", "Subscription-services disclosure and Prime commentary", "prime subscriptions, subscription services"),
+        ("Cost Structure", "Fulfillment / shipping", "Fulfillment and shipping cost intensity", "OPEX / FCF", "Operating expense notes and MD&A logistics commentary", "fulfillment cost, shipping cost"),
+        ("Reinvestment", "Logistics / AWS infrastructure", "CAPEX and working capital intensity", "CAPEX / OCF / FCF", "Cash-flow statement, property/equipment additions", "capex, logistics, aws infrastructure"),
+    ],
+    "TSLA": [
+        ("Automotive", "Vehicles", "Deliveries and ASP", "Revenue / Gross Profit", "Vehicle delivery data, automotive revenue, ASP bridge", "vehicle deliveries, automotive asp"),
+        ("Automotive", "Automotive margin", "Automotive gross margin / battery cost", "Gross Profit / EBIT", "Automotive segment gross margin and cost commentary", "automotive gross margin, battery cost"),
+        ("Energy", "Energy generation and storage", "Storage deployments and energy revenue", "Revenue / Gross Profit / CAPEX", "Energy segment disclosure and deployment data", "energy storage deployments, energy revenue"),
+        ("Services", "Services and other", "Service revenue and warranty cost", "Revenue / OPEX / OCF", "Services segment disclosure and warranty reserve notes", "services other revenue, warranty"),
+        ("Software", "FSD / software", "Software attach rate / deferred revenue", "Revenue / Margin / Terminal Multiple", "Deferred revenue and software recognition commentary", "fsd revenue, software, deferred revenue"),
+        ("Reinvestment", "Factories / capacity", "Factory utilization and CAPEX", "CAPEX / Working Capital / FCF", "Capacity, production, and cash-flow disclosures", "factory utilization, capex"),
+    ],
+    "COST": [
+        ("Membership", "Members", "Membership count / renewal rate", "Revenue Durability / Terminal Multiple", "Membership disclosure and renewal-rate commentary", "membership count, renewal rate"),
+        ("Membership", "Fees", "Membership fee revenue", "Gross Profit / OCF", "Membership fee revenue disclosure", "membership fees, membership revenue"),
+        ("Retail", "Merchandise", "Same-store sales, traffic, basket size", "Revenue / Gross Profit", "Comparable sales and traffic/basket commentary", "same-store sales, traffic, basket size"),
+        ("Retail", "Private label", "Private-label penetration", "Gross Margin / Loyalty", "Merchandise margin and Kirkland/private-label commentary", "private label, kirkland, merchandise margin"),
+        ("Working Capital", "Inventory / suppliers", "Inventory turns and supplier terms", "OCF / Working Capital", "Inventory, payables, and cash conversion disclosures", "inventory turns, supplier terms, payables"),
+        ("Reinvestment", "Warehouses", "Warehouse count and expansion CAPEX", "Revenue / CAPEX / FCF", "Warehouse count, openings, remodels, CAPEX", "warehouse count, openings, capex"),
+    ],
+    "NBIS": [
+        ("Capacity", "Blackwell", "Blackwell GW deployed / revenue per GW", "Revenue / CAPEX / FCF", "Capacity disclosures, customer contracts, IR materials", "blackwell gw, revenue per gw"),
+        ("Capacity", "Rubin", "Rubin GW deployed / revenue per GW", "Revenue / CAPEX / Terminal Multiple", "Roadmap and customer-contract disclosures", "rubin gw, revenue per gw"),
+        ("Capacity", "Other compute", "Other GPU / data-center capacity", "Revenue / Utilization", "Capacity disclosures and fleet mix commentary", "gpu capacity, utilization"),
+        ("Utilization", "Customer contracts", "Utilization and contract duration", "Revenue Durability / OCF", "Backlog, contract duration, customer prepayment disclosures", "utilization, contract duration, prepayments"),
+        ("Cost Structure", "Power / cooling", "Energy, cooling, hosting cost", "Gross Margin / OCF", "Power/cooling cost and data-center operating disclosures", "power cost, cooling cost, hosting"),
+        ("Reinvestment", "Data centers", "Growth CAPEX / build cost per GW", "CAPEX / Debt / Dilution / FCF", "CAPEX plan, PP&E additions, financing disclosures", "growth capex, build cost per gw"),
+        ("Capital Structure", "Debt / equity", "Funding mix and dilution", "WACC / Fair Value / Share", "Debt, equity issuance, SBC and share-count disclosures", "debt, equity dilution, sbc"),
+    ],
+}
+
+
+PROFILE_PRODUCT_SERVICE_LINES = {
+    "AI Infrastructure / Data Center": [
+        ("Capacity", "GPU / compute capacity", "Capacity deployed and utilization", "Revenue / CAPEX / FCF", "10-K business description, capacity disclosures, MD&A", "capacity deployed, utilization, gpu, data center"),
+        ("Pricing", "Compute contracts", "Revenue per compute unit / contract pricing", "Revenue / Margin", "Customer contracts, backlog/RPO, pricing commentary", "revenue per unit, contract pricing, backlog"),
+        ("Cost Structure", "Power / cooling / hosting", "Energy and operating cost intensity", "Gross Margin / OCF", "Cost of revenue notes, power/cooling disclosures", "energy cost, cooling, cost of revenue"),
+        ("Reinvestment", "Data-center buildout", "Growth CAPEX and build cost", "CAPEX / FCF / Debt", "Cash-flow statement, PP&E additions, CAPEX guidance", "growth capex, pp&e, build cost"),
+        ("Capital Structure", "Funding", "Customer prepayments, debt, equity dilution", "WACC / Fair Value / Share", "Balance sheet, financing notes, customer prepayments", "prepayments, debt, equity, dilution"),
+    ],
+    "Consumer Brand / Retail": [
+        ("Product Revenue", "Core products / merchandise", "Units, traffic, basket size, ASP", "Revenue / Gross Profit", "10-K revenue disaggregation, MD&A, segment note", "units, traffic, basket, asp"),
+        ("Services / Loyalty", "Membership or loyalty economics", "Members, renewal, fee revenue", "Revenue Durability / OCF / Terminal Multiple", "Business description and revenue disaggregation", "membership, renewal, loyalty, fee revenue"),
+        ("Margin", "Product mix", "Gross margin by product/channel", "Gross Profit / EBIT", "Gross margin and cost-of-sales commentary", "gross margin, product mix, channel"),
+        ("Working Capital", "Inventory / suppliers", "Inventory turns and payable terms", "OCF / Working Capital", "Inventory and payable disclosures", "inventory turns, payables, supplier terms"),
+        ("Reinvestment", "Stores / channels / logistics", "Expansion and maintenance CAPEX", "CAPEX / FCF", "CAPEX disclosures, store/channel expansion commentary", "stores, channels, logistics, capex"),
+        ("Capital Allocation", "Buybacks / dilution", "Repurchases and diluted shares", "Fair Value / Share", "Cash-flow statement and share-count disclosures", "buybacks, diluted shares"),
+    ],
+    "SaaS / Software": [
+        ("Subscription", "Recurring software", "ARR / seats / customer growth", "Revenue / OCF / Terminal Multiple", "Business description, revenue note, RPO/deferred revenue", "arr, seats, customers, subscription"),
+        ("Pricing", "ARPU / ACV", "Pricing and expansion revenue", "Revenue / Margin", "Customer metrics, ARPU/ACV, price increases", "arpu, acv, pricing, expansion"),
+        ("Retention", "Customer base", "NRR, churn, renewal", "Revenue Durability / Terminal Multiple", "Retention disclosure and customer commentary", "nrr, retention, churn, renewal"),
+        ("Services", "Implementation / support", "Services revenue and support cost", "Revenue / Gross Margin / OPEX", "Revenue disaggregation and cost-of-revenue notes", "services revenue, implementation, support"),
+        ("Reinvestment", "Product / cloud platform", "R&D, hosting, capitalized software", "OPEX / CAPEX / FCF", "R&D, hosting, capitalized software disclosures", "r&d, hosting, capitalized software"),
+        ("Capital Allocation", "SBC / buybacks", "SBC dilution and repurchases", "Fair Value / Share", "SBC and share-count disclosures", "sbc, repurchases, diluted shares"),
+    ],
+    "Marketplace / Platform": [
+        ("Marketplace", "Buyer / seller activity", "GMV, users, transactions", "Revenue / Terminal Multiple", "Business metrics, revenue disaggregation, MD&A", "gmv, users, transactions"),
+        ("Monetization", "Platform fees", "Take rate and value-added services", "Revenue / Gross Margin", "Revenue divided by GMV, fee disclosures", "take rate, platform fees"),
+        ("Advertising / Payments", "Ancillary monetization", "Ads, payments, seller tools", "Revenue / Margin", "Revenue disaggregation and product commentary", "advertising, payments, seller services"),
+        ("Trust / Quality", "Platform operations", "Trust, safety, fraud, support cost", "OPEX / OCF", "Operating expense and risk disclosures", "trust safety, fraud, support"),
+        ("Capital Allocation", "SBC / buybacks", "Dilution and repurchases", "Fair Value / Share", "SBC and share-count disclosures", "sbc, buybacks, diluted shares"),
+    ],
+    "Semiconductor": [
+        ("Product Revenue", "Chip / product families", "Units, ASP, product mix", "Revenue / Gross Profit", "Revenue disaggregation, product commentary, MD&A", "units, asp, product mix"),
+        ("Capacity", "Foundry / manufacturing", "Utilization and supply availability", "Revenue / Gross Margin / Inventory", "Capacity, utilization, inventory disclosures", "utilization, capacity, inventory"),
+        ("Cost Structure", "Manufacturing cost", "Wafer, packaging, input cost", "Gross Margin / OCF", "Cost-of-sales and inventory commentary", "wafer cost, packaging, cost of sales"),
+        ("Reinvestment", "R&D / capacity", "R&D intensity and growth CAPEX", "OPEX / CAPEX / FCF", "R&D, PP&E, CAPEX disclosures", "r&d, capex, pp&e"),
+        ("Cycle", "End-market demand", "Book-to-bill, backlog, inventory cycle", "Revenue / Terminal Multiple", "Backlog, inventory, customer commentary", "book-to-bill, backlog, inventory"),
+    ],
+    "Industrial / Hardware": [
+        ("Orders", "Backlog / orders", "Orders, backlog, book-to-bill", "Revenue / OCF", "Backlog and order disclosures", "orders, backlog, book-to-bill"),
+        ("Product Revenue", "Units / systems", "Units shipped, ASP, mix", "Revenue / Gross Profit", "Revenue disaggregation and MD&A", "units shipped, asp, mix"),
+        ("Cost Structure", "Production", "Utilization, input cost, warranty", "Gross Margin / OCF", "Cost-of-sales, warranty, utilization commentary", "utilization, input cost, warranty"),
+        ("Working Capital", "Inventory / receivables", "Inventory build and receivables timing", "OCF / Working Capital", "Inventory, receivables, customer deposits", "inventory, receivables, deposits"),
+        ("Reinvestment", "Capacity / tooling", "Maintenance and growth CAPEX", "CAPEX / FCF", "PP&E additions and CAPEX guidance", "tooling, capacity, capex"),
+    ],
+    "Financial / Fintech": [
+        ("Assets / Flows", "AUM / deposits / loans", "Balance growth and flow mix", "Revenue / Risk / Capital", "AUM, deposits, loans, flow disclosures", "aum, deposits, loans"),
+        ("Spread / Fees", "Financial products", "NIM, fee rate, transaction volume", "Revenue / Margin", "NIM, fee-rate, payment-volume disclosures", "nim, fee rate, transaction volume"),
+        ("Risk", "Credit / fraud", "Loss rate and reserves", "NOPAT / Capital / Terminal Multiple", "Credit losses, reserves, risk disclosures", "credit losses, reserves, fraud"),
+        ("Efficiency", "Operating platform", "Efficiency ratio and operating leverage", "OPEX / NOPAT", "Efficiency and operating expense disclosures", "efficiency ratio, operating leverage"),
+        ("Capital", "Regulatory capital / dilution", "Capital ratio, leverage, share count", "WACC / Fair Value / Share", "Capital, leverage, liquidity disclosures", "capital ratio, leverage, dilution"),
+    ],
+    "Energy / Commodity": [
+        ("Production", "Commodity output", "Production volume and realized price", "Revenue / OCF", "Production and pricing disclosures", "production volume, realized price"),
+        ("Cost Structure", "Operations", "Operating cost per unit", "Gross Margin / OCF", "Operating cost and transportation disclosures", "operating cost, transportation"),
+        ("Reinvestment", "Reserve / production base", "Maintenance CAPEX, decline rate, growth projects", "CAPEX / FCF / Terminal Multiple", "CAPEX, reserves, decline-rate disclosures", "reserve life, decline rate, capex"),
+        ("Balance Sheet", "Debt / hedges", "Leverage and hedging", "WACC / OCF / Risk", "Debt, hedging, liquidity disclosures", "debt, hedges, liquidity"),
+    ],
+    "Biotech / Pharma": [
+        ("Commercial", "Approved products", "Product revenue and growth", "Revenue / Gross Profit", "Product revenue and launch disclosures", "product revenue, launch"),
+        ("Pipeline", "Clinical assets", "Probability, peak sales, launch timing", "SOTP / Terminal Multiple / Risk", "Pipeline table, trial and FDA disclosures", "pipeline, clinical, fda, peak sales"),
+        ("Margin", "Manufacturing / royalty", "Gross-to-net, COGS, royalties", "Gross Profit / NOPAT", "Gross-to-net and royalty disclosures", "gross-to-net, royalty, cogs"),
+        ("Reinvestment", "R&D", "Clinical trial and platform spend", "OPEX / FCF / Dilution", "R&D and cash runway disclosures", "clinical trial, r&d, cash runway"),
+        ("Capital", "Cash runway", "Cash, burn, debt/equity funding", "WACC / Fair Value / Share", "Cash, debt, equity and going-concern disclosures", "cash runway, burn, dilution"),
+    ],
+    "Real Estate / REIT": [
+        ("Property Revenue", "Property portfolio", "Occupancy and rent", "Revenue / NOI / AFFO", "Property table, occupancy and leasing disclosures", "occupancy, rent, noi"),
+        ("Growth", "Development / acquisitions", "Development additions and lease spreads", "Revenue / CAPEX / NAV", "Development pipeline and acquisition disclosures", "development, lease spreads"),
+        ("Cost Structure", "Property operations", "NOI margin and maintenance cost", "NOI / AFFO", "Property operating expense disclosures", "noi margin, maintenance"),
+        ("Capital", "Debt / equity / dividend", "Leverage, maturities, payout", "WACC / NAV / Fair Value", "Debt maturity and dividend disclosures", "debt maturity, payout, equity"),
+    ],
+    "Advertising / Media / Ad-Tech": [
+        ("Audience", "Traffic / impressions", "Traffic, impressions, audience growth", "Revenue / Terminal Multiple", "Audience and traffic disclosures", "traffic, impressions, audience"),
+        ("Monetization", "Ads / take rate", "CPM/CPC/fill rate/take rate", "Revenue / Margin", "Ad pricing, fill-rate, revenue disaggregation", "cpm, cpc, fill rate, take rate"),
+        ("Cost Structure", "Publisher / content / data", "TAC, content and data cost", "Gross Margin / OCF", "Traffic acquisition/content cost disclosures", "tac, content cost, data cost"),
+        ("Platform", "Measurement / privacy", "Measurement quality and privacy impact", "Revenue Durability / OPEX", "Risk factors and platform commentary", "privacy, measurement, regulation"),
+        ("Capital Allocation", "SBC / buybacks", "SBC dilution and repurchases", "Fair Value / Share", "SBC and share-count disclosures", "sbc, buybacks, diluted shares"),
+    ],
+    "General": [
+        ("Revenue", "Primary revenue stream", "Volume, price, mix and customer demand", "Revenue / Gross Profit", "10-K business description, revenue note, MD&A", "revenue, volume, price, mix"),
+        ("Margin", "Product / service mix", "Gross margin and cost structure", "Gross Profit / EBIT / FCF", "Gross margin and cost-of-sales disclosures", "gross margin, cost of sales"),
+        ("Cash Conversion", "Working capital", "Collections, inventory, payables, deferred revenue", "OCF / Working Capital", "Balance sheet and cash-flow statement", "working capital, receivables, inventory, payables"),
+        ("Reinvestment", "Maintenance / growth investment", "Maintenance CAPEX and growth CAPEX", "CAPEX / FCF", "Cash-flow statement and CAPEX commentary", "capex, pp&e, depreciation"),
+        ("Capital Allocation", "Debt / dilution / buybacks", "Net debt, share count and buybacks", "WACC / Fair Value / Share", "Debt and share-count disclosures", "net debt, diluted shares, buybacks"),
+    ],
+}
+
+
+def _context_search_text(ctx: dict) -> str:
+    dataset = ctx.get("dataset", {}) or {}
+    story = ctx.get("pa11_story") or {}
+    filing_texts = dataset.get("filing_texts") or ctx.get("filing_texts") or {}
+    filing_blob = " ".join(str(value or "") for value in filing_texts.values()) if isinstance(filing_texts, dict) else str(filing_texts or "")
+    parts = [
+        dataset.get("ticker"),
+        dataset.get("company"),
+        dataset.get("sector"),
+        dataset.get("industry"),
+        dataset.get("company_description"),
+        story.get("product_or_service_story"),
+        story.get("economic_engine_summary"),
+        " ".join(story.get("core_revenue_drivers") or []),
+        " ".join(story.get("core_margin_drivers") or []),
+        filing_blob[:120000],
+    ]
+    return re.sub(r"\s+", " ", " ".join(str(part or "") for part in parts)).lower()
+
+
+def _line_row(group: str, line: str, driver: str, impact: str, source: str, keywords: str, confidence: str = "Medium") -> dict:
+    return {
+        "driver_group": group,
+        "product_line": line,
+        "specific_driver": driver,
+        "row_type": "Manual Review",
+        "evidence": "Manual Review",
+        "confidence": confidence,
+        "model_impact": f"{driver} -> {impact} -> FCF -> DCF fair value / SOTP / implied multiple.",
+        "source_basis": source,
+        "suggested_keywords": keywords,
+        "fallback_used": "Product/service-line discovery; exact numeric series not loaded.",
+    }
+
+
+def _keyword_present(text: str, keyword_csv: str) -> bool:
+    tokens = [token.strip().lower() for token in re.split(r"[,/]", keyword_csv or "") if token.strip()]
+    return any(token and token in text for token in tokens)
+
+
+def _product_service_lines_from_context(ctx: dict, selected_profile: str) -> list[dict]:
+    dataset = ctx.get("dataset", {}) or {}
+    ticker = str(dataset.get("ticker") or "").upper()
+    text = _context_search_text(ctx)
+    source_rows = PRODUCT_SERVICE_LINE_LIBRARY.get(ticker) or PROFILE_PRODUCT_SERVICE_LINES.get(selected_profile) or PROFILE_PRODUCT_SERVICE_LINES["General"]
+    rows = [
+        _line_row(group, line, driver, impact, source, keywords, confidence="High" if ticker in PRODUCT_SERVICE_LINE_LIBRARY else "Medium")
+        for group, line, driver, impact, source, keywords in source_rows
+    ]
+
+    profile_rows = PROFILE_PRODUCT_SERVICE_LINES.get(selected_profile, [])
+    for group, line, driver, impact, source, keywords in profile_rows:
+        if len(rows) >= 14:
+            break
+        if any(row["product_line"].lower() == line.lower() and row["specific_driver"].lower() == driver.lower() for row in rows):
+            continue
+        if _keyword_present(text, keywords) or _keyword_present(text, line):
+            rows.append(_line_row(group, line, driver, impact, source, keywords, confidence="Medium"))
+
+    story = ctx.get("pa11_story") or {}
+    story_driver_groups = [
+        ("Revenue", "Business model", story.get("core_revenue_drivers") or [], "Revenue / Gross Profit"),
+        ("Margin", "Business model", story.get("core_margin_drivers") or [], "Gross Profit / EBIT"),
+        ("Reinvestment", "Business model", story.get("core_capex_drivers") or [], "CAPEX / FCF"),
+        ("Capital Allocation", "Business model", story.get("core_dilution_or_balance_sheet_drivers") or [], "WACC / Fair Value / Share"),
+    ]
+    for group, line, drivers, impact in story_driver_groups:
+        for driver in drivers[:3]:
+            if len(rows) >= 16:
+                break
+            if any(str(driver).lower() in row["specific_driver"].lower() for row in rows):
+                continue
+            rows.append(
+                _line_row(
+                    group,
+                    line,
+                    str(driver),
+                    impact,
+                    "PA-11 story driver map plus loaded filing/company profile context",
+                    str(driver).lower(),
+                    confidence="Medium",
+                )
+            )
+
+    if not rows:
+        rows = [_line_row(*item, confidence="Low") for item in PROFILE_PRODUCT_SERVICE_LINES["General"]]
+    return rows[:16]
+
+
+def _safe_row_key_text(*parts: object) -> str:
+    text = "_".join(str(part or "") for part in parts).lower()
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")[:90] or "manual_review"
+
+
 def _driver_display_value(value, unit: str) -> str:
     if value is None:
         return "Manual Review"
@@ -3596,19 +3838,52 @@ def _build_profile_key_driver_table(
     template = get_driver_template(selected_profile)
     driver_matrix = _profile_driver_matrix(ctx, selected_profile, assumptions, specs)
     period_map = dict(zip(period_labels(len(specs)), [label for _year, label in specs]))
+    group_by_driver = {
+        driver_key: group_name
+        for group_name, driver_keys in (template.get("driver_groups") or {}).items()
+        for driver_key in driver_keys
+    }
     rows = []
+    for item in _product_service_lines_from_context(ctx, selected_profile):
+        row = {
+            "Row Key": f"line:{_safe_row_key_text(item.get('driver_group'), item.get('product_line'), item.get('specific_driver'))}",
+            "Driver Group": item.get("driver_group"),
+            "Product / Service Line": item.get("product_line"),
+            "Specific Driver": item.get("specific_driver"),
+            "Driver / Assumption": f"{item.get('product_line')} - {item.get('specific_driver')}",
+            "Assumption": item.get("specific_driver"),
+            "Row Type": item.get("row_type", "Manual Review"),
+            "Evidence": item.get("evidence", "Manual Review"),
+            "Confidence": item.get("confidence", "Medium"),
+            "Model Impact": item.get("model_impact"),
+            "Source / Basis": item.get("source_basis"),
+            "Suggested Keywords": item.get("suggested_keywords"),
+            "Fallback Used": item.get("fallback_used"),
+            "Manual Review Needed": "Yes",
+        }
+        for label in [*locked_period_columns, *[forecast for _year, forecast in specs]]:
+            row[label] = "Manual Review"
+        rows.append(row)
+
     for _, driver in driver_matrix.iterrows():
         confidence = driver.get("Confidence") or "Low"
         row_type = "Manual Review" if str(confidence).lower() == "low" and "analyst estimate" in str(driver.get("Method", "")).lower() else "Input"
+        specific_driver = driver.get("Driver")
+        driver_group = group_by_driver.get(driver.get("row_key"), "Model Driver")
         row = {
             "Row Key": f"driver:{driver.get('row_key')}",
-            "Driver / Assumption": driver.get("Driver"),
-            "Assumption": driver.get("Driver"),
+            "Driver Group": driver_group,
+            "Product / Service Line": "Consolidated model",
+            "Specific Driver": specific_driver,
+            "Driver / Assumption": specific_driver,
+            "Assumption": specific_driver,
             "Row Type": row_type,
             "Evidence": driver.get("Evidence Grade") or "Estimated",
             "Confidence": confidence,
             "Model Impact": driver.get("Model Impact"),
             "Source / Basis": driver.get("Method"),
+            "Suggested Keywords": str(driver.get("Driver") or "").lower(),
+            "Fallback Used": "Editable business-driver template connected to consolidated DCF.",
             "Manual Review Needed": "Yes" if row_type == "Manual Review" else "No",
         }
         for label in locked_period_columns:
@@ -3636,6 +3911,9 @@ def _build_profile_key_driver_table(
     for _, source in financial_rows.iterrows():
         row = {
             "Row Key": source.get("Row Key"),
+            "Driver Group": "Linked Financial Model",
+            "Product / Service Line": "Consolidated output",
+            "Specific Driver": source.get("Assumption"),
             "Driver / Assumption": source.get("Assumption"),
             "Assumption": source.get("Assumption"),
             "Row Type": source.get("Row Type"),
@@ -3643,6 +3921,8 @@ def _build_profile_key_driver_table(
             "Confidence": source.get("Confidence"),
             "Model Impact": "Financial output connected to the driver forecast and DCF valuation.",
             "Source / Basis": "Linked DCF operating model",
+            "Suggested Keywords": str(source.get("Assumption") or "").lower(),
+            "Fallback Used": "Calculated from consolidated financial model.",
             "Manual Review Needed": "No",
         }
         for label in [*locked_period_columns, *[forecast for _year, forecast in specs]]:
@@ -3650,7 +3930,24 @@ def _build_profile_key_driver_table(
                 row[label] = source.get(label)
         rows.append(row)
     out = pd.DataFrame(rows)
-    ordered = ["Row Key", "Driver / Assumption", "Assumption", "Row Type", "Evidence", "Confidence", "Model Impact", "Source / Basis", "Manual Review Needed", *locked_period_columns, *[label for _year, label in specs]]
+    ordered = [
+        "Row Key",
+        "Driver Group",
+        "Product / Service Line",
+        "Specific Driver",
+        "Driver / Assumption",
+        "Assumption",
+        "Row Type",
+        "Evidence",
+        "Confidence",
+        "Model Impact",
+        "Source / Basis",
+        "Suggested Keywords",
+        "Fallback Used",
+        "Manual Review Needed",
+        *locked_period_columns,
+        *[label for _year, label in specs],
+    ]
     return out[[col for col in ordered if col in out.columns]]
 
 
@@ -4497,13 +4794,31 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             st.caption("Input rows are editable for forecast periods. Calculated rows show the dollar impact and are locked unless Advanced Overrides is enabled.")
             if advanced_overrides and any(str(row.get("Row Type")) == "Override" for _, row in group_matrix.iterrows()):
                 st.warning("Advanced Overrides enabled: dollar rows marked Override can be edited. Apply will reverse-calculate the implied percentage assumption.")
-            static_disabled = ["Row Key", "Driver / Assumption", "Assumption", "Row Type", "Evidence", "Confidence", "Model Impact", "Source / Basis", "Manual Review Needed"]
+            static_disabled = [
+                "Row Key",
+                "Driver Group",
+                "Product / Service Line",
+                "Specific Driver",
+                "Driver / Assumption",
+                "Assumption",
+                "Row Type",
+                "Evidence",
+                "Confidence",
+                "Model Impact",
+                "Source / Basis",
+                "Suggested Keywords",
+                "Fallback Used",
+                "Manual Review Needed",
+            ]
+            hidden_columns = {"Row Key": None, "Assumption": None}
+            if group_name == "Key Drivers":
+                hidden_columns["Driver / Assumption"] = None
             result = render_editable_assumption_table(
                 group_matrix,
                 key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}_{re.sub(r'[^A-Za-z0-9]+', '_', group_name).lower()}",
                 scenario_scope=scenario_scope,
-                column_config={"Row Key": None, "Assumption": None},
-                height=520 if group_name == "Key Drivers" else 320,
+                column_config=hidden_columns,
+                height=680 if group_name == "Key Drivers" else 320,
                 disabled_columns=[col for col in [*static_disabled, *all_period_columns] if col in group_matrix.columns] if read_only else [col for col in [*static_disabled, *locked_period_columns] if col in group_matrix.columns],
                 read_only=read_only,
             )
@@ -4511,16 +4826,29 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             st.markdown("**Model Impact**")
             impact_rows = []
             if group_name == "Key Drivers":
-                impact_rows = group_matrix[["Driver / Assumption", "Row Type", "Model Impact", "Source / Basis", "Manual Review Needed"]].head(18).to_dict("records")
+                impact_rows = group_matrix[
+                    [
+                        "Driver Group",
+                        "Product / Service Line",
+                        "Specific Driver",
+                        "Row Type",
+                        "Model Impact",
+                        "Source / Basis",
+                        "Suggested Keywords",
+                        "Manual Review Needed",
+                    ]
+                ].head(22).to_dict("records")
                 template = get_driver_template(selected_driver_profile or "General")
                 with st.expander("Manual Review Plan", expanded=False):
                     review_rows = [
                         {
-                            "Driver": row.get("Driver / Assumption"),
+                            "Driver Group": row.get("Driver Group"),
+                            "Product / Service Line": row.get("Product / Service Line"),
+                            "Specific Driver": row.get("Specific Driver") or row.get("Driver / Assumption"),
                             "Why it matters": row.get("Model Impact"),
                             "Where to verify": row.get("Source / Basis"),
-                            "Suggested keywords": ", ".join(str(row.get("Driver / Assumption", "")).lower().replace("/", " ").split()[:4]),
-                            "Fallback used": "Driver template estimate" if row.get("Manual Review Needed") == "Yes" else "Linked model output",
+                            "Suggested keywords": row.get("Suggested Keywords") or ", ".join(str(row.get("Driver / Assumption", "")).lower().replace("/", " ").split()[:4]),
+                            "Fallback used": row.get("Fallback Used") or ("Driver template estimate" if row.get("Manual Review Needed") == "Yes" else "Linked model output"),
                             "Confidence impact": row.get("Confidence"),
                             "Affected model lines": row.get("Model Impact"),
                         }

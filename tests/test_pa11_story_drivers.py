@@ -77,3 +77,50 @@ def test_pa11_story_sector_peer_context_and_no_buzz_hallucination():
     assert story["latest_updates"] == "Dashboard has not fetched recent news/social data yet."
     assert story["driver_reflection_map"]
     assert all(row["DCF line affected"] for row in story["driver_reflection_map"])
+
+
+def test_key_driver_discovery_uses_ticker_specific_product_lines_for_apple():
+    from ui.dashboard_v2 import _product_service_lines_from_context
+
+    ctx = {
+        "dataset": {
+            "ticker": "AAPL",
+            "company": "Apple Inc.",
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+            "company_description": "Apple sells iPhone, Mac, iPad, wearables and services including App Store, iCloud, AppleCare and Apple Pay.",
+        },
+        "pa11_story": {},
+    }
+
+    rows = _product_service_lines_from_context(ctx, "Consumer Brand / Retail")
+    text = " ".join(f"{row['product_line']} {row['specific_driver']}" for row in rows).lower()
+
+    assert "iphone" in text
+    assert "services" in text or "app store" in text
+    assert "buybacks" in text or "diluted shares" in text
+    assert all(row["model_impact"] for row in rows)
+    assert all(row["source_basis"] for row in rows)
+
+
+def test_key_driver_discovery_uses_profile_product_lines_for_unknown_software():
+    from ui.dashboard_v2 import _product_service_lines_from_context
+
+    ctx = {
+        "dataset": {
+            "ticker": "SOFT",
+            "company": "Software Co",
+            "sector": "Technology",
+            "industry": "Software",
+            "company_description": "Software Co sells subscription workflow software with recurring revenue, seats, retention, and cloud hosting costs.",
+        },
+        "pa11_story": {},
+    }
+
+    rows = _product_service_lines_from_context(ctx, "SaaS / Software")
+    text = " ".join(f"{row['driver_group']} {row['product_line']} {row['specific_driver']}" for row in rows).lower()
+
+    assert "subscription" in text
+    assert "retention" in text
+    assert "sbc" in text or "buybacks" in text
+    assert "revenue growth %" not in text
