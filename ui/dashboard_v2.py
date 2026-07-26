@@ -3524,6 +3524,20 @@ ECONOMIC_ENGINE_COPY = {
 }
 
 
+TICKER_ECONOMIC_ENGINE_COPY = {
+    "AAPL": {
+        "profile": "Premium Consumer Technology Ecosystem",
+        "engine": "Installed base x iPhone replacement cycles x Services monetization, supported by product margin resilience, supply-chain execution, and buybacks.",
+        "review": "iPhone revenue growth, Services growth, installed-base monetization, Products vs Services gross margin, China/geography risk, supply-chain/component cost pressure, buybacks, diluted shares.",
+    },
+    "NBIS": {
+        "profile": "AI Infrastructure / NeoCloud",
+        "engine": "GPU/data-center capacity x utilization x revenue per compute unit, funded by customer prepayments, debt, equity, and growth CAPEX.",
+        "review": "Blackwell/Rubin capacity, revenue per GW, utilization, power/cooling cost, build cost per GW, customer prepayments, funding mix, dilution.",
+    },
+}
+
+
 PRODUCT_SERVICE_LINE_LIBRARY = {
     "AAPL": [
         ("Product Revenue", "iPhone", "iPhone revenue", "Revenue / Gross Profit", "10-K product revenue table; MD&A net sales by category", "iphone revenue, net sales iphone"),
@@ -3672,6 +3686,131 @@ PROFILE_PRODUCT_SERVICE_LINES = {
 }
 
 
+PRODUCT_LINE_REVENUE_WEIGHTS = {
+    "AAPL": {
+        "iPhone": 0.50,
+        "Mac": 0.08,
+        "iPad": 0.07,
+        "Wearables": 0.10,
+        "Services": 0.25,
+    },
+    "MSFT": {"Azure": 0.32, "Microsoft 365 / Office": 0.30, "Windows / Devices": 0.16, "LinkedIn": 0.08, "Gaming": 0.14},
+    "AMZN": {"Online stores": 0.38, "Third-party seller services": 0.22, "AWS": 0.18, "Advertising services": 0.10, "Subscriptions": 0.12},
+    "TSLA": {"Vehicles": 0.78, "Energy": 0.10, "Services and other": 0.08, "Software / FSD": 0.04},
+    "COST": {"Merchandise": 0.96, "Membership fees": 0.04},
+    "NBIS": {"Blackwell capacity": 0.45, "Rubin capacity": 0.20, "Other compute": 0.20, "Customer contracts": 0.15},
+}
+
+
+PROFILE_LINE_WEIGHTS = {
+    "AI Infrastructure / Data Center": {"Compute capacity": 0.65, "Compute contracts": 0.25, "Managed services": 0.10},
+    "Consumer Brand / Retail": {"Core products / merchandise": 0.82, "Services / loyalty": 0.10, "Accessories / ancillary": 0.08},
+    "SaaS / Software": {"Recurring software": 0.78, "Services / implementation": 0.14, "Expansion / usage": 0.08},
+    "Marketplace / Platform": {"Marketplace activity": 0.68, "Platform fees": 0.20, "Advertising / payments": 0.12},
+    "Semiconductor": {"Core product families": 0.80, "Services / licensing": 0.08, "Other end markets": 0.12},
+    "Industrial / Hardware": {"Units / systems": 0.75, "Services / aftermarket": 0.15, "Other revenue": 0.10},
+    "Financial / Fintech": {"Assets / flows": 0.55, "Fees / transactions": 0.35, "Other financial services": 0.10},
+    "Energy / Commodity": {"Production": 0.82, "Services / midstream": 0.10, "Other": 0.08},
+    "Biotech / Pharma": {"Commercial products": 0.70, "Pipeline / milestones": 0.20, "Royalties / partnerships": 0.10},
+    "Real Estate / REIT": {"Property portfolio": 0.82, "Development / acquisitions": 0.12, "Other property services": 0.06},
+    "Advertising / Media / Ad-Tech": {"Advertising": 0.75, "Platform / data": 0.15, "Other media services": 0.10},
+    "General": {"Core business": 0.80, "Secondary revenue": 0.15, "Other": 0.05},
+}
+
+
+TICKER_CORE_DRIVER_ROWS = {
+    "AAPL": [
+        {"group": "Product Revenue", "line": "iPhone", "driver": "Revenue Growth %", "metric": "revenue_growth", "evidence": "Segment disclosure / user forecast", "confidence": "High", "impact": "Revenue / Gross Profit / FCF"},
+        {"group": "Product Revenue", "line": "iPhone", "driver": "Revenue $", "metric": "revenue_amount", "evidence": "Calculated from product-line forecast", "confidence": "Medium", "impact": "Revenue / FCF"},
+        {"group": "Product Revenue", "line": "Mac", "driver": "Revenue Growth %", "metric": "revenue_growth", "evidence": "Segment disclosure / user forecast", "confidence": "High", "impact": "Revenue"},
+        {"group": "Product Revenue", "line": "Mac", "driver": "Revenue $", "metric": "revenue_amount", "evidence": "Calculated from product-line forecast", "confidence": "Medium", "impact": "Revenue"},
+        {"group": "Product Revenue", "line": "iPad", "driver": "Revenue Growth %", "metric": "revenue_growth", "evidence": "Segment disclosure / user forecast", "confidence": "High", "impact": "Revenue"},
+        {"group": "Product Revenue", "line": "iPad", "driver": "Revenue $", "metric": "revenue_amount", "evidence": "Calculated from product-line forecast", "confidence": "Medium", "impact": "Revenue"},
+        {"group": "Product Revenue", "line": "Wearables", "driver": "Revenue Growth %", "metric": "revenue_growth", "evidence": "Segment disclosure / user forecast", "confidence": "High", "impact": "Revenue"},
+        {"group": "Product Revenue", "line": "Wearables", "driver": "Revenue $", "metric": "revenue_amount", "evidence": "Calculated from product-line forecast", "confidence": "Medium", "impact": "Revenue"},
+        {"group": "Services", "line": "Services", "driver": "Revenue Growth %", "metric": "revenue_growth", "evidence": "Segment disclosure / user forecast", "confidence": "High", "impact": "Revenue / Margin / Terminal Multiple"},
+        {"group": "Services", "line": "Services", "driver": "Revenue $", "metric": "revenue_amount", "evidence": "Calculated from product-line forecast", "confidence": "Medium", "impact": "Revenue / OCF"},
+        {"group": "Margin Mix", "line": "Products vs Services", "driver": "Gross Margin %", "metric": "margin_pct", "evidence": "Reported / calculated mix where available", "confidence": "Medium", "impact": "Gross Profit / EBIT / FCF"},
+        {"group": "Capital Allocation", "line": "Buybacks / Diluted Shares", "driver": "Diluted Share Growth %", "metric": "diluted_share_growth", "evidence": "Cash flow / share count", "confidence": "High", "impact": "Fair Value / Share"},
+    ],
+}
+
+
+TICKER_SECONDARY_DRIVER_ROWS = {
+    "AAPL": [
+        {"group": "Product Volume", "line": "iPhone", "driver": "Units / Upgrade Cycle", "metric": "manual_review", "evidence": "Not disclosed directly", "confidence": "Medium", "impact": "Revenue Growth", "keywords": "iPhone, units, ASP, upgrade cycle, installed base, China"},
+        {"group": "Pricing", "line": "iPhone", "driver": "ASP Growth %", "metric": "manual_review", "evidence": "Revenue divided by estimated units", "confidence": "Medium", "impact": "Revenue / Gross Margin", "keywords": "iPhone ASP, average selling price, mix"},
+        {"group": "Services", "line": "App Store", "driver": "Monetization / Take Rate", "metric": "manual_review", "evidence": "Not disclosed directly", "confidence": "Medium", "impact": "Services Revenue / Margin", "keywords": "App Store, take rate, regulation, developer fees"},
+        {"group": "Services", "line": "iCloud / AppleCare / Payments", "driver": "Subscription & Payments Revenue", "metric": "manual_review", "evidence": "Services detail / user assumption", "confidence": "Medium", "impact": "Services Revenue / OCF", "keywords": "iCloud, AppleCare, Apple Pay, subscriptions"},
+        {"group": "Installed Base", "line": "Installed Base", "driver": "Active Devices / Services per Device", "metric": "manual_review", "evidence": "Company disclosure / user assumption", "confidence": "Medium", "impact": "Services Durability / Terminal Multiple", "keywords": "installed base, active devices, services per device"},
+        {"group": "Cost Structure", "line": "Supply Chain", "driver": "Component Cost Pressure", "metric": "manual_review", "evidence": "MD&A and supplier commentary", "confidence": "Medium", "impact": "Gross Margin / OCF", "keywords": "components, supply chain, China, freight, mix"},
+    ],
+}
+
+
+def _product_line_weights(ctx: dict, selected_profile: str) -> dict[str, float]:
+    dataset = ctx.get("dataset", {}) or {}
+    ticker = str(dataset.get("ticker") or "").upper()
+    weights = PRODUCT_LINE_REVENUE_WEIGHTS.get(ticker) or PROFILE_LINE_WEIGHTS.get(selected_profile) or PROFILE_LINE_WEIGHTS["General"]
+    total = sum(float(value or 0) for value in weights.values())
+    if total <= 0:
+        return {"Core business": 1.0}
+    return {line: float(value or 0) / total for line, value in weights.items() if float(value or 0) > 0}
+
+
+def _latest_revenue_for_product_model(historicals: pd.DataFrame | None, model_table: pd.DataFrame | None) -> float:
+    periods = _model_period_columns(model_table)
+    for period in reversed(periods):
+        if str(period).startswith("FY") or period == "LTM Latest":
+            value = _model_line_value(model_table, "Revenue", period)
+            if value is not None:
+                return float(value)
+    if historicals is not None and not historicals.empty and "Revenue" in historicals:
+        values = pd.to_numeric(historicals["Revenue"], errors="coerce").dropna()
+        if not values.empty:
+            return float(values.iloc[-1])
+    return 0.0
+
+
+def _product_driver_core_rows(ctx: dict, selected_profile: str) -> list[dict]:
+    ticker = str((ctx.get("dataset") or {}).get("ticker") or "").upper()
+    if ticker in TICKER_CORE_DRIVER_ROWS:
+        return [dict(row) for row in TICKER_CORE_DRIVER_ROWS[ticker]]
+    rows = []
+    for line in _product_line_weights(ctx, selected_profile):
+        rows.extend(
+            [
+                {"group": "Revenue", "line": line, "driver": "Revenue Growth %", "metric": "revenue_growth", "evidence": "User forecast / profile fallback", "confidence": "Medium", "impact": "Revenue / FCF"},
+                {"group": "Revenue", "line": line, "driver": "Revenue $", "metric": "revenue_amount", "evidence": "Calculated from product-line forecast", "confidence": "Medium", "impact": "Revenue / FCF"},
+            ]
+        )
+    rows.append({"group": "Margin", "line": "Mix / cost structure", "driver": "Gross Margin %", "metric": "margin_pct", "evidence": "User forecast / historical margin", "confidence": "Medium", "impact": "Gross Profit / EBIT / FCF"})
+    rows.append({"group": "Capital Allocation", "line": "Diluted Shares", "driver": "Diluted Share Growth %", "metric": "diluted_share_growth", "evidence": "Cash flow / share count", "confidence": "Medium", "impact": "Fair Value / Share"})
+    return rows[:12]
+
+
+def _product_driver_secondary_rows(ctx: dict, selected_profile: str) -> list[dict]:
+    ticker = str((ctx.get("dataset") or {}).get("ticker") or "").upper()
+    if ticker in TICKER_SECONDARY_DRIVER_ROWS:
+        return [dict(row) for row in TICKER_SECONDARY_DRIVER_ROWS[ticker]]
+    rows = []
+    for item in _product_service_lines_from_context(ctx, selected_profile):
+        rows.append(
+            {
+                "group": item.get("driver_group"),
+                "line": item.get("product_line"),
+                "driver": item.get("specific_driver"),
+                "metric": "manual_review",
+                "evidence": item.get("evidence", "Manual Review"),
+                "confidence": "Low" if item.get("evidence") == "Manual Review" else item.get("confidence", "Medium"),
+                "impact": item.get("model_impact", "Revenue / FCF"),
+                "source": item.get("source_basis"),
+                "keywords": item.get("suggested_keywords"),
+            }
+        )
+    return rows[:12]
+
+
 def _context_search_text(ctx: dict) -> str:
     dataset = ctx.get("dataset", {}) or {}
     story = ctx.get("pa11_story") or {}
@@ -3766,6 +3905,155 @@ def _safe_row_key_text(*parts: object) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text).strip("_")[:90] or "manual_review"
 
 
+def _product_metric_unit(metric: str) -> str:
+    return {
+        "revenue_growth": "%",
+        "revenue_amount": "money",
+        "margin_pct": "%",
+        "gross_profit_amount": "money",
+        "diluted_share_growth": "%",
+    }.get(metric, "text")
+
+
+def _product_metric_row_type(metric: str, advanced_overrides: bool) -> str:
+    if metric == "revenue_amount":
+        return "Override" if advanced_overrides else "Calculated"
+    if metric == "gross_profit_amount":
+        return "Calculated"
+    if metric == "manual_review":
+        return "Manual Review"
+    return "Input"
+
+
+def _short_model_impact(text: object) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return "Revenue / FCF"
+    if "->" in clean:
+        return clean.split("->", 1)[0].strip()
+    return clean[:90].rstrip()
+
+
+def _product_baseline_revenue(line: str, weights: dict[str, float], latest_revenue: float) -> float:
+    return float(latest_revenue or 0.0) * float(weights.get(line, 0.0) or 0.0)
+
+
+def _product_forecast_state(
+    ctx: dict,
+    selected_profile: str,
+    assumptions: dict,
+    model_table: pd.DataFrame | None,
+    specs: list[tuple[int, str]],
+) -> dict[str, dict[str, float]]:
+    latest_revenue = _latest_revenue_for_product_model(ctx.get("historicals"), model_table)
+    weights = _product_line_weights(ctx, selected_profile)
+    base_growth = float(assumptions.get("revenue_cagr") or 0.0)
+    base_margin = float(assumptions.get("gross_margin") or 0.45)
+    yearly = assumptions.get("forecast_assumptions_by_year") or {}
+    state = {}
+    for line, weight in weights.items():
+        prior_revenue = _product_baseline_revenue(line, weights, latest_revenue)
+        line_rows = {}
+        for year, label in specs:
+            year_values = yearly.get(str(year)) or yearly.get(year) or {}
+            growth = float(year_values.get("revenue_cagr", base_growth) or 0.0)
+            margin = float(year_values.get("gross_margin", base_margin) or base_margin)
+            revenue = prior_revenue * (1 + growth)
+            line_rows[label] = {"revenue_growth": growth, "revenue_amount": revenue, "margin_pct": margin, "gross_profit_amount": revenue * margin}
+            prior_revenue = revenue
+        state[line] = line_rows
+    return state
+
+
+def _product_driver_table_rows(
+    ctx: dict,
+    selected_profile: str,
+    assumptions: dict,
+    model_table: pd.DataFrame | None,
+    specs: list[tuple[int, str]],
+    locked_period_columns: list[str],
+    advanced_overrides: bool,
+    include_secondary: bool,
+) -> list[dict]:
+    state = _product_forecast_state(ctx, selected_profile, assumptions, model_table, specs)
+    weights = _product_line_weights(ctx, selected_profile)
+    base_growth = float(assumptions.get("revenue_cagr") or 0.0)
+    base_margin = float(assumptions.get("gross_margin") or 0.45)
+    rows = []
+    for spec in _product_driver_core_rows(ctx, selected_profile):
+        line = spec.get("line")
+        metric = spec.get("metric")
+        unit = _product_metric_unit(metric)
+        row_type = _product_metric_row_type(metric, advanced_overrides)
+        confidence = spec.get("confidence", "Medium")
+        if row_type == "Manual Review" and confidence == "High":
+            confidence = "Medium"
+        row = {
+            "Row Key": f"pline:{_safe_row_key_text(line)}:{metric}",
+            "Driver Group": spec.get("group"),
+            "Product / Service Line": line,
+            "Specific Driver": spec.get("driver"),
+            "Driver / Assumption": f"{line} - {spec.get('driver')}",
+            "Assumption": f"{line} {spec.get('driver')}",
+            "Row Type": row_type,
+            "Evidence": spec.get("evidence"),
+            "Confidence": confidence,
+            "Model Impact": _short_model_impact(spec.get("impact")),
+            "Source / Basis": spec.get("source") or "Known product/service profile plus consolidated financial model",
+            "Suggested Filing Section": spec.get("section") or "Business, revenue disaggregation, MD&A, segment note",
+            "Suggested Keywords": spec.get("keywords") or f"{line}, {spec.get('driver')}, revenue, gross margin",
+            "Fallback Used": "Product-line allocation fallback; rollup updates consolidated DCF assumptions.",
+            "Manual Review Needed": "Yes" if row_type == "Manual Review" else "No",
+            "Affected Assumptions": spec.get("impact"),
+            "User Note": "",
+        }
+        for label in locked_period_columns:
+            row[label] = "Manual Review"
+        for _year, label in specs:
+            if metric == "revenue_growth":
+                value = state.get(line, {}).get(label, {}).get("revenue_growth", base_growth)
+            elif metric == "revenue_amount":
+                value = state.get(line, {}).get(label, {}).get("revenue_amount")
+            elif metric == "margin_pct":
+                value = state.get(line, {}).get(label, {}).get("margin_pct", base_margin)
+            elif metric == "gross_profit_amount":
+                value = state.get(line, {}).get(label, {}).get("gross_profit_amount")
+            elif metric == "diluted_share_growth":
+                yearly = assumptions.get("forecast_assumptions_by_year") or {}
+                year_values = yearly.get(str(_year)) or yearly.get(_year) or {}
+                value = year_values.get("diluted_share_growth", assumptions.get("diluted_share_growth"))
+            else:
+                value = None
+            row[label] = _driver_display_value(value, unit) if unit != "text" else "Manual Review"
+        rows.append(row)
+
+    if include_secondary:
+        for spec in _product_driver_secondary_rows(ctx, selected_profile):
+            row = {
+                "Row Key": f"pline_secondary:{_safe_row_key_text(spec.get('line'), spec.get('driver'))}",
+                "Driver Group": spec.get("group"),
+                "Product / Service Line": spec.get("line"),
+                "Specific Driver": spec.get("driver"),
+                "Driver / Assumption": f"{spec.get('line')} - {spec.get('driver')}",
+                "Assumption": f"{spec.get('line')} {spec.get('driver')}",
+                "Row Type": "Manual Review",
+                "Evidence": spec.get("evidence") or "Manual Review",
+                "Confidence": "Medium" if spec.get("confidence") == "High" else spec.get("confidence", "Medium"),
+                "Model Impact": _short_model_impact(spec.get("impact")),
+                "Source / Basis": spec.get("source") or "Manual review source needed",
+                "Suggested Filing Section": spec.get("section") or "10-K MD&A, revenue note, earnings call, investor presentation",
+                "Suggested Keywords": spec.get("keywords") or f"{spec.get('line')}, {spec.get('driver')}",
+                "Fallback Used": "No direct numeric source loaded; use related revenue/margin row until verified.",
+                "Manual Review Needed": "Yes",
+                "Affected Assumptions": spec.get("impact"),
+                "User Note": "",
+            }
+            for label in [*locked_period_columns, *[forecast for _year, forecast in specs]]:
+                row[label] = "Manual Review"
+            rows.append(row)
+    return rows
+
+
 def _driver_display_value(value, unit: str) -> str:
     if value is None:
         return "Manual Review"
@@ -3833,6 +4121,7 @@ def _build_profile_key_driver_table(
     locked_period_columns: list[str],
     selected_profile: str,
     advanced_overrides: bool,
+    include_secondary: bool = False,
 ) -> pd.DataFrame:
     profile_obj = build_business_model_profile(selected_profile)
     template = get_driver_template(selected_profile)
@@ -3843,54 +4132,47 @@ def _build_profile_key_driver_table(
         for group_name, driver_keys in (template.get("driver_groups") or {}).items()
         for driver_key in driver_keys
     }
-    rows = []
-    for item in _product_service_lines_from_context(ctx, selected_profile):
-        row = {
-            "Row Key": f"line:{_safe_row_key_text(item.get('driver_group'), item.get('product_line'), item.get('specific_driver'))}",
-            "Driver Group": item.get("driver_group"),
-            "Product / Service Line": item.get("product_line"),
-            "Specific Driver": item.get("specific_driver"),
-            "Driver / Assumption": f"{item.get('product_line')} - {item.get('specific_driver')}",
-            "Assumption": item.get("specific_driver"),
-            "Row Type": item.get("row_type", "Manual Review"),
-            "Evidence": item.get("evidence", "Manual Review"),
-            "Confidence": item.get("confidence", "Medium"),
-            "Model Impact": item.get("model_impact"),
-            "Source / Basis": item.get("source_basis"),
-            "Suggested Keywords": item.get("suggested_keywords"),
-            "Fallback Used": item.get("fallback_used"),
-            "Manual Review Needed": "Yes",
-        }
-        for label in [*locked_period_columns, *[forecast for _year, forecast in specs]]:
-            row[label] = "Manual Review"
-        rows.append(row)
+    rows = _product_driver_table_rows(
+        ctx,
+        selected_profile,
+        assumptions,
+        model_table,
+        specs,
+        locked_period_columns,
+        advanced_overrides,
+        include_secondary,
+    )
 
-    for _, driver in driver_matrix.iterrows():
-        confidence = driver.get("Confidence") or "Low"
-        row_type = "Manual Review" if str(confidence).lower() == "low" and "analyst estimate" in str(driver.get("Method", "")).lower() else "Input"
-        specific_driver = driver.get("Driver")
-        driver_group = group_by_driver.get(driver.get("row_key"), "Model Driver")
-        row = {
-            "Row Key": f"driver:{driver.get('row_key')}",
-            "Driver Group": driver_group,
-            "Product / Service Line": "Consolidated model",
-            "Specific Driver": specific_driver,
-            "Driver / Assumption": specific_driver,
-            "Assumption": specific_driver,
-            "Row Type": row_type,
-            "Evidence": driver.get("Evidence Grade") or "Estimated",
-            "Confidence": confidence,
-            "Model Impact": driver.get("Model Impact"),
-            "Source / Basis": driver.get("Method"),
-            "Suggested Keywords": str(driver.get("Driver") or "").lower(),
-            "Fallback Used": "Editable business-driver template connected to consolidated DCF.",
-            "Manual Review Needed": "Yes" if row_type == "Manual Review" else "No",
-        }
-        for label in locked_period_columns:
-            row[label] = _driver_display_value(driver.get("Historical / LTM"), driver.get("Unit"))
-        for driver_period, forecast_label in period_map.items():
-            row[forecast_label] = _driver_display_value(driver.get(driver_period), driver.get("Unit"))
-        rows.append(row)
+    if include_secondary:
+        for _, driver in driver_matrix.iterrows():
+            confidence = driver.get("Confidence") or "Low"
+            row_type = "Manual Review" if str(confidence).lower() == "low" and "analyst estimate" in str(driver.get("Method", "")).lower() else "Input"
+            specific_driver = driver.get("Driver")
+            driver_group = group_by_driver.get(driver.get("row_key"), "Secondary Model Driver")
+            row = {
+                "Row Key": f"driver:{driver.get('row_key')}",
+                "Driver Group": driver_group,
+                "Product / Service Line": "Consolidated model",
+                "Specific Driver": specific_driver,
+                "Driver / Assumption": specific_driver,
+                "Assumption": specific_driver,
+                "Row Type": row_type,
+                "Evidence": driver.get("Evidence Grade") or "Estimated",
+                "Confidence": confidence,
+                "Model Impact": _short_model_impact(driver.get("Model Impact")),
+                "Source / Basis": driver.get("Method"),
+                "Suggested Filing Section": "DCF model / business driver template",
+                "Suggested Keywords": str(driver.get("Driver") or "").lower(),
+                "Fallback Used": "Secondary consolidated driver template.",
+                "Manual Review Needed": "Yes" if row_type == "Manual Review" else "No",
+                "Affected Assumptions": driver.get("Model Impact"),
+                "User Note": "",
+            }
+            for label in locked_period_columns:
+                row[label] = _driver_display_value(driver.get("Historical / LTM"), driver.get("Unit"))
+            for driver_period, forecast_label in period_map.items():
+                row[forecast_label] = _driver_display_value(driver.get(driver_period), driver.get("Unit"))
+            rows.append(row)
 
     financial_row_keys = [
         "revenue_cagr",
@@ -3907,7 +4189,7 @@ def _build_profile_key_driver_table(
         "diluted_shares_amount",
         "fair_value_per_share_amount",
     ]
-    financial_rows = original_matrix[original_matrix["Row Key"].isin(financial_row_keys)].copy()
+    financial_rows = original_matrix[original_matrix["Row Key"].isin(financial_row_keys)].copy() if include_secondary else pd.DataFrame()
     for _, source in financial_rows.iterrows():
         row = {
             "Row Key": source.get("Row Key"),
@@ -3919,11 +4201,14 @@ def _build_profile_key_driver_table(
             "Row Type": source.get("Row Type"),
             "Evidence": source.get("Evidence"),
             "Confidence": source.get("Confidence"),
-            "Model Impact": "Financial output connected to the driver forecast and DCF valuation.",
+            "Model Impact": "DCF output / fair value",
             "Source / Basis": "Linked DCF operating model",
+            "Suggested Filing Section": "Forecast and valuation output",
             "Suggested Keywords": str(source.get("Assumption") or "").lower(),
             "Fallback Used": "Calculated from consolidated financial model.",
             "Manual Review Needed": "No",
+            "Affected Assumptions": "DCF output / fair value",
+            "User Note": "",
         }
         for label in [*locked_period_columns, *[forecast for _year, forecast in specs]]:
             if label in source:
@@ -3942,9 +4227,12 @@ def _build_profile_key_driver_table(
         "Confidence",
         "Model Impact",
         "Source / Basis",
+        "Suggested Filing Section",
         "Suggested Keywords",
         "Fallback Used",
         "Manual Review Needed",
+        "Affected Assumptions",
+        "User Note",
         *locked_period_columns,
         *[label for _year, label in specs],
     ]
@@ -3960,10 +4248,12 @@ def _apply_profile_driver_table(ctx: dict, selected_profile: str, display_table:
     period_map = dict(zip([label for _year, label in specs], period_labels(years)))
     by_key = driver_matrix.set_index("row_key", drop=False)
     display = display_table.copy() if display_table is not None else pd.DataFrame()
+    has_driver_rows = False
     for _, row in display.iterrows():
         row_key = str(row.get("Row Key") or "")
         if not row_key.startswith("driver:"):
             continue
+        has_driver_rows = True
         driver_key = row_key.split("driver:", 1)[1]
         if driver_key not in by_key.index:
             continue
@@ -3977,17 +4267,82 @@ def _apply_profile_driver_table(ctx: dict, selected_profile: str, display_table:
     edited_driver_matrix = by_key.reset_index(drop=True)
     if persist:
         st.session_state[_driver_matrix_session_key(dataset.get("ticker", "default"), "Key Drivers", profile_obj.model_type)] = edited_driver_matrix.copy()
-    integrated = integrate_driver_valuation(
-        scenario_scope,
-        profile_obj,
-        edited_driver_matrix,
-        ctx.get("historicals"),
-        market,
-        assumptions,
-        maintenance_treatment=profile_obj.maintenance_cost_treatment,
-        capitalized_maintenance_pct=1.0,
-    )
-    return integrated.dcf_assumptions or assumptions
+    out = dict(assumptions)
+    if has_driver_rows:
+        integrated = integrate_driver_valuation(
+            scenario_scope,
+            profile_obj,
+            edited_driver_matrix,
+            ctx.get("historicals"),
+            market,
+            assumptions,
+            maintenance_treatment=profile_obj.maintenance_cost_treatment,
+            capitalized_maintenance_pct=1.0,
+        )
+        out = integrated.dcf_assumptions or out
+    return _apply_product_driver_rollup(ctx, selected_profile, display, out, specs)
+
+
+def _apply_product_driver_rollup(ctx: dict, selected_profile: str, display_table: pd.DataFrame, assumptions: dict, specs: list[tuple[int, str]]) -> dict:
+    if display_table is None or display_table.empty or "Row Key" not in display_table:
+        return assumptions
+    product_rows = display_table[display_table["Row Key"].astype(str).str.startswith("pline:")].copy()
+    if product_rows.empty:
+        return assumptions
+    out = dict(assumptions)
+    yearly = {str(key): dict(value) for key, value in (out.get("forecast_assumptions_by_year") or {}).items()}
+    weights = _product_line_weights(ctx, selected_profile)
+    latest_revenue = _latest_revenue_for_product_model(ctx.get("historicals"), None)
+    if latest_revenue <= 0:
+        latest_revenue = float(out.get("latest_revenue") or 0.0)
+    base_growth = float(out.get("revenue_cagr") or 0.0)
+    base_margin = float(out.get("gross_margin") or 0.45)
+
+    rows_by_line_metric: dict[tuple[str, str], pd.Series] = {}
+    for _, row in product_rows.iterrows():
+        line = str(row.get("Product / Service Line") or "")
+        row_key = str(row.get("Row Key") or "")
+        metric = row_key.rsplit(":", 1)[-1]
+        rows_by_line_metric[(line, metric)] = row
+
+    revenue_lines = [line for line in weights if (line, "revenue_growth") in rows_by_line_metric or (line, "revenue_amount") in rows_by_line_metric]
+    if revenue_lines:
+        prior_total = sum(_product_baseline_revenue(line, weights, latest_revenue) for line in revenue_lines)
+        prior_by_line = {line: _product_baseline_revenue(line, weights, latest_revenue) for line in revenue_lines}
+        for year, label in specs:
+            total_revenue = 0.0
+            weighted_gross_profit = 0.0
+            for line in revenue_lines:
+                growth_row = rows_by_line_metric.get((line, "revenue_growth"))
+                amount_row = rows_by_line_metric.get((line, "revenue_amount"))
+                margin_row = rows_by_line_metric.get((line, "margin_pct")) or rows_by_line_metric.get(("Products vs Services", "margin_pct")) or rows_by_line_metric.get(("Mix / cost structure", "margin_pct"))
+                growth = _driver_internal_value(growth_row.get(label), "%") if growth_row is not None and label in growth_row else None
+                if growth is None:
+                    growth = yearly.get(str(year), {}).get("revenue_cagr", base_growth)
+                amount = None
+                if amount_row is not None and str(amount_row.get("Row Type")) == "Override" and label in amount_row:
+                    amount = _driver_internal_value(amount_row.get(label), "money")
+                revenue = float(amount) if amount is not None else float(prior_by_line.get(line, 0.0)) * (1 + float(growth or 0.0))
+                margin = _driver_internal_value(margin_row.get(label), "%") if margin_row is not None and label in margin_row else base_margin
+                total_revenue += revenue
+                weighted_gross_profit += revenue * float(margin if margin is not None else base_margin)
+                prior_by_line[line] = revenue
+            year_values = yearly.setdefault(str(year), {})
+            if prior_total > 0:
+                year_values["revenue_cagr"] = total_revenue / prior_total - 1
+            if total_revenue > 0:
+                year_values["gross_margin"] = max(0.0, min(0.95, weighted_gross_profit / total_revenue))
+            prior_total = total_revenue
+
+    for year, label in specs:
+        for (_line, metric), row in rows_by_line_metric.items():
+            if metric != "diluted_share_growth" or label not in row:
+                continue
+            value = _driver_internal_value(row.get(label), "%")
+            if value is not None:
+                yearly.setdefault(str(year), {})["diluted_share_growth"] = value
+    out["forecast_assumptions_by_year"] = yearly
+    return out
 
 
 def _matrix_unit_to_assumption_unit(unit: str) -> str:
@@ -4770,11 +5125,18 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             selected_driver_profile = None
             if group_name == "Key Drivers":
                 selected_driver_profile, detected_profile = _selected_driver_profile(ctx, ticker)
-                profile_copy = ECONOMIC_ENGINE_COPY.get(selected_driver_profile, ECONOMIC_ENGINE_COPY["General"])
-                st.markdown(f"**Business Driver Profile: {selected_driver_profile}**")
+                ticker_profile_copy = TICKER_ECONOMIC_ENGINE_COPY.get(str(ticker or "").upper())
+                profile_copy = ticker_profile_copy or ECONOMIC_ENGINE_COPY.get(selected_driver_profile, ECONOMIC_ENGINE_COPY["General"])
+                display_profile = profile_copy.get("profile") or selected_driver_profile
+                st.markdown(f"**Business Driver Profile: {display_profile}**")
                 st.caption(f"Inferred profile: {detected_profile.get('profile')} ({detected_profile.get('confidence')}). {detected_profile.get('reason')}")
                 st.info(f"**Economic Engine:** {profile_copy['engine']}")
                 st.caption(f"Key assumptions to review: {profile_copy['review']}")
+                show_secondary_drivers = st.toggle(
+                    "Show secondary drivers and manual review items",
+                    value=False,
+                    key=f"show_secondary_key_drivers_{ticker}_{scenario_scope}",
+                )
                 group_matrix = _build_profile_key_driver_table(
                     ctx,
                     working,
@@ -4785,6 +5147,7 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
                     locked_period_columns,
                     selected_driver_profile,
                     advanced_overrides,
+                    include_secondary=show_secondary_drivers,
                 )
             else:
                 group_matrix = original_matrix[original_matrix["Row Key"].isin(row_keys)].copy()
@@ -4794,6 +5157,40 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
             st.caption("Input rows are editable for forecast periods. Calculated rows show the dollar impact and are locked unless Advanced Overrides is enabled.")
             if advanced_overrides and any(str(row.get("Row Type")) == "Override" for _, row in group_matrix.iterrows()):
                 st.warning("Advanced Overrides enabled: dollar rows marked Override can be edited. Apply will reverse-calculate the implied percentage assumption.")
+            editor_matrix = group_matrix
+            if group_name == "Key Drivers":
+                default_key_driver_cols = [
+                    "Row Key",
+                    "Product / Service Line",
+                    "Specific Driver",
+                    "Row Type",
+                    "Evidence",
+                    "Confidence",
+                    "Model Impact",
+                    *locked_period_columns,
+                    *period_columns,
+                ]
+                expanded_key_driver_cols = [
+                    "Row Key",
+                    "Driver Group",
+                    "Product / Service Line",
+                    "Specific Driver",
+                    "Row Type",
+                    "Evidence",
+                    "Confidence",
+                    "Model Impact",
+                    "Source / Basis",
+                    "Suggested Filing Section",
+                    "Suggested Keywords",
+                    "Fallback Used",
+                    "Manual Review Needed",
+                    "Affected Assumptions",
+                    "User Note",
+                    *locked_period_columns,
+                    *period_columns,
+                ]
+                chosen_cols = expanded_key_driver_cols if show_secondary_drivers else default_key_driver_cols
+                editor_matrix = group_matrix[[col for col in chosen_cols if col in group_matrix.columns]].copy()
             static_disabled = [
                 "Row Key",
                 "Driver Group",
@@ -4807,19 +5204,21 @@ def _render_assumption_matrix_workbench(ctx: dict, base: dict, working: dict, sc
                 "Model Impact",
                 "Source / Basis",
                 "Suggested Keywords",
+                "Suggested Filing Section",
                 "Fallback Used",
                 "Manual Review Needed",
+                "Affected Assumptions",
             ]
             hidden_columns = {"Row Key": None, "Assumption": None}
             if group_name == "Key Drivers":
                 hidden_columns["Driver / Assumption"] = None
             result = render_editable_assumption_table(
-                group_matrix,
+                editor_matrix,
                 key=f"dcf_assumption_matrix_{ticker}_{scenario_scope}_{re.sub(r'[^A-Za-z0-9]+', '_', group_name).lower()}",
                 scenario_scope=scenario_scope,
                 column_config=hidden_columns,
-                height=680 if group_name == "Key Drivers" else 320,
-                disabled_columns=[col for col in [*static_disabled, *all_period_columns] if col in group_matrix.columns] if read_only else [col for col in [*static_disabled, *locked_period_columns] if col in group_matrix.columns],
+                height=500 if group_name == "Key Drivers" and not show_secondary_drivers else 680 if group_name == "Key Drivers" else 320,
+                disabled_columns=[col for col in [*static_disabled, *all_period_columns] if col in editor_matrix.columns] if read_only else [col for col in [*static_disabled, *locked_period_columns] if col in editor_matrix.columns],
                 read_only=read_only,
             )
             group_results.append((group_name, result, group_matrix, selected_driver_profile))
@@ -7320,9 +7719,11 @@ def _pa11_story_snapshot(ctx: dict) -> None:
     c1, c2 = st.columns([0.58, 0.42])
     with c1:
         st.markdown("**PA-11 Story**")
-        st.write(_clip_text(story.get("what_they_do") or story.get("company_one_liner") or "Unavailable", 360))
+        detailed_sections = story.get("detailed_story_sections") or []
+        one_line = next((row.get("Read") for row in detailed_sections if row.get("Section") == "One-line thesis"), None)
+        st.write(_clip_text(one_line or story.get("what_they_do") or story.get("company_one_liner") or "Unavailable", 520))
         st.markdown("**Economic Engine**")
-        st.write(_clip_text(story.get("economic_engine_summary") or story.get("how_they_make_money") or "Unavailable", 520))
+        st.write(_clip_text(story.get("economic_engine_summary") or story.get("how_they_make_money") or "Unavailable", 720))
         st.caption(
             f"Business model: {story.get('business_model_type', 'General')} | "
             f"Confidence: {story.get('business_model_confidence', 'Low')}"
@@ -7330,7 +7731,7 @@ def _pa11_story_snapshot(ctx: dict) -> None:
         st.markdown("**Key Drivers**")
         driver_rows = story.get("driver_to_assumption_map") or []
         if driver_rows:
-            _mini_list("Key drivers", [row.get("driver") for row in driver_rows[:4]])
+            _mini_list("Key drivers", [row.get("driver") for row in driver_rows[:6]])
         else:
             st.write("Unavailable")
     with c2:
@@ -7344,21 +7745,22 @@ def _pa11_story_snapshot(ctx: dict) -> None:
         st.write(_clip_text(story.get("latest_updates") or "Dashboard has not fetched recent news/social data yet.", 260))
 
     with st.expander("Open Full Story & Driver Map", expanded=False):
-        story_sections = pd.DataFrame(
-            [
-                {"Section": "Company story", "Read": story.get("what_they_do")},
-                {"Section": "Economic engine", "Read": story.get("economic_engine_summary")},
-                {"Section": "Product / service story", "Read": story.get("product_or_service_story") or story.get("product_story")},
-                {"Section": "Competitive dynamics", "Read": story.get("competitive_dynamics")},
-                {"Section": "Sector / theme context", "Read": story.get("industry_theme_context")},
-                {"Section": "Peer context", "Read": story.get("peer_positioning_context") or story.get("peer_context")},
-                {"Section": "M&A impact on drivers", "Read": story.get("ma_effect_on_growth")},
-                {"Section": "New drivers / changes", "Read": story.get("new_drivers_or_changes")},
-                {"Section": "Social/news buzz", "Read": story.get("social_buzz_context")},
-                {"Section": "Moat / risk context", "Read": story.get("moat_context") or story.get("moat_and_risk_context")},
-                {"Section": "Management context", "Read": story.get("management_context")},
-            ]
-        )
+        story_sections = pd.DataFrame(detailed_sections or [
+            {"Section": "One-line thesis", "Read": story.get("company_one_liner")},
+            {"Section": "What the company actually sells", "Read": story.get("what_they_do")},
+            {"Section": "Product / service economic engine", "Read": story.get("economic_engine_summary")},
+            {"Section": "Growth drivers by product/service", "Read": story.get("growth_driver_story")},
+            {"Section": "Margin and cost drivers", "Read": ", ".join(story.get("core_margin_drivers") or [])},
+            {"Section": "Cash conversion / working capital drivers", "Read": ", ".join(story.get("core_ocf_drivers") or [])},
+            {"Section": "Reinvestment and CAPEX needs", "Read": ", ".join(story.get("core_capex_drivers") or [])},
+            {"Section": "Capital allocation / buybacks / dilution", "Read": ", ".join(story.get("core_dilution_or_balance_sheet_drivers") or [])},
+            {"Section": "M&A effect", "Read": story.get("ma_effect_on_growth")},
+            {"Section": "Sector / theme / peer context", "Read": story.get("industry_theme_context")},
+            {"Section": "Latest updates / events", "Read": story.get("latest_updates")},
+            {"Section": "What this means for DCF assumptions", "Read": " ".join(row.get("suggested_action", "") for row in (story.get("assumption_map") or [])[:4])},
+            {"Section": "Relevant clauses / evidence to review", "Read": "Load SEC evidence for clause-level mapping."},
+            {"Section": "Manual review questions", "Read": " | ".join(story.get("manual_review_items") or [])},
+        ])
         show_table(story_sections, "Story sections unavailable.")
         driver_category_rows = pd.DataFrame(
             [
@@ -7398,7 +7800,7 @@ def _pa11_story_snapshot(ctx: dict) -> None:
             driver_map["affected_assumptions"] = driver_map["affected_assumptions"].apply(lambda value: ", ".join(value) if isinstance(value, list) else value)
         show_table(driver_map, "No driver-to-assumption map available.")
         st.markdown("**Driver Reflection Map**")
-        show_table(pd.DataFrame(story.get("driver_reflection_map") or []), "No driver reflection map available.")
+        show_table(pd.DataFrame(story.get("story_to_driver_mapping") or story.get("driver_reflection_map") or []), "No driver reflection map available.")
         st.markdown("**Growth Driver Map**")
         show_table(pd.DataFrame(story.get("growth_drivers") or []), "No growth-driver map available.")
         st.markdown("**What This Means For Assumptions**")

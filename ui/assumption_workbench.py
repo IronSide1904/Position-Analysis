@@ -68,7 +68,26 @@ def _delta(old: Any, new: Any):
 
 
 def _editable_period_columns(frame: pd.DataFrame) -> list[str]:
-    static = {"Row Key", "Assumption", "Evidence", "Confidence", "Row Type", "Scenario", "Status"}
+    static = {
+        "Row Key",
+        "Driver Group",
+        "Product / Service Line",
+        "Specific Driver",
+        "Assumption",
+        "Evidence",
+        "Confidence",
+        "Row Type",
+        "Scenario",
+        "Status",
+        "Model Impact",
+        "Source / Basis",
+        "Suggested Keywords",
+        "Suggested Filing Section",
+        "Fallback Used",
+        "Manual Review Needed",
+        "Affected Assumptions",
+        "User Note",
+    }
     return [col for col in frame.columns if col not in static]
 
 

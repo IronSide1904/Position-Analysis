@@ -383,6 +383,214 @@ def _latest_updates(news_items: list[dict] | None, events: list[dict] | None) ->
     return "Dashboard has not fetched recent news/social data yet."
 
 
+def _ticker_specific_story(company: str, ticker: str) -> dict:
+    if str(ticker or "").upper() != "AAPL":
+        return {}
+    story_sections = [
+        {
+            "Section": "One-line thesis",
+            "Read": (
+                "Apple is a premium consumer-technology ecosystem business whose value is driven by iPhone replacement cycles, "
+                "a large installed base, high-margin Services monetization, product gross margin resilience, supply-chain execution, and buyback-led per-share compounding."
+            ),
+        },
+        {
+            "Section": "What the company actually sells",
+            "Read": (
+                "The core reported revenue categories are iPhone, Mac, iPad, Wearables/Home/Accessories, and Services. "
+                "Services includes monetization streams such as App Store, iCloud, AppleCare, payments, licensing, and subscriptions, but sub-service detail usually needs manual review."
+            ),
+        },
+        {
+            "Section": "Product / service economic engine",
+            "Read": (
+                "iPhone is the ecosystem anchor: it drives device entry, replacement cycles, accessories, and Services attach. "
+                "Services improve durability because recurring and platform-like revenue can carry stronger margins than hardware."
+            ),
+        },
+        {
+            "Section": "Growth drivers by product/service",
+            "Read": (
+                "The valuation debate is whether iPhone replacement demand, installed-base growth, Services ARPU, and wearables/accessory demand can offset mature hardware unit growth."
+            ),
+        },
+        {
+            "Section": "Margin and cost drivers",
+            "Read": (
+                "Watch product gross margin, Services gross margin, product mix, component costs, supply-chain execution, freight, FX, and geography mix."
+            ),
+        },
+        {
+            "Section": "Cash conversion / working capital drivers",
+            "Read": (
+                "Apple's cash conversion depends on inventory discipline, supplier/payment terms, Services cash collection, and whether hardware cycles require working-capital investment."
+            ),
+        },
+        {
+            "Section": "Reinvestment and CAPEX needs",
+            "Read": (
+                "CAPEX is not the main story versus AI infrastructure or heavy manufacturing, but data centers, tooling, silicon, AI/device capability, and supply-chain investments still need review."
+            ),
+        },
+        {
+            "Section": "Capital allocation / buybacks / dilution",
+            "Read": (
+                "Buybacks are central to per-share value. Review FCF durability, repurchase pace, diluted share count, net cash/debt, and whether buybacks offset maturity in hardware growth."
+            ),
+        },
+        {
+            "Section": "Sector / theme / peer context",
+            "Read": (
+                "Compare Apple as a premium device ecosystem plus high-margin services platform, not just as generic technology. "
+                "Hardware peers matter for product margins; platform/services peers matter for Services quality; mega-cap peers matter for FCF durability and buyback yield."
+            ),
+        },
+        {
+            "Section": "What this means for DCF assumptions",
+            "Read": (
+                "Review iPhone revenue growth, Services growth, product-vs-Services gross margin mix, OCF conversion, CAPEX intensity, terminal multiple, and buyback-driven share-count reduction."
+            ),
+        },
+    ]
+    driver_map = [
+        {
+            "driver": "iPhone revenue growth / upgrade cycle / ASP",
+            "driver_category": "iPhone",
+            "story_signal": "iPhone remains the ecosystem anchor and the largest product revenue driver.",
+            "affected_assumptions": ["Revenue Growth", "Gross Margin", "Terminal Multiple"],
+            "direction": "Review",
+            "evidence": "Product revenue disclosure, MD&A, launch-cycle commentary, geography mix.",
+            "confidence": "High",
+            "suggested_action": "Review iPhone revenue trend, replacement cycle, ASP/mix, and China exposure before changing User Case revenue growth.",
+            "sotp_line_affected": "iPhone/product revenue if SOTP segment exists",
+            "multiples_implication": "Durable iPhone demand can support terminal value; weakness should reduce growth or multiple.",
+            "manual_review_needed": "Yes",
+        },
+        {
+            "driver": "Services revenue growth and Services gross margin",
+            "driver_category": "Services",
+            "story_signal": "Services mix can improve revenue durability, gross margin, OCF quality, and terminal multiple support.",
+            "affected_assumptions": ["Revenue Growth", "Gross Margin", "OCF Margin", "Terminal Multiple"],
+            "direction": "Review",
+            "evidence": "Services revenue disclosure, gross margin disclosure, App Store/regulatory commentary.",
+            "confidence": "High",
+            "suggested_action": "Review Services growth, Services margin, App Store/regulatory pressure, and installed-base monetization.",
+            "sotp_line_affected": "Services segment value if SOTP segment exists",
+            "multiples_implication": "Higher Services mix can justify a premium versus pure hardware peers.",
+            "manual_review_needed": "Yes",
+        },
+        {
+            "driver": "Mac, iPad, Wearables revenue contribution",
+            "driver_category": "Other Products",
+            "story_signal": "Secondary product categories affect total growth, mix, accessory demand, and ecosystem stickiness.",
+            "affected_assumptions": ["Revenue Growth", "Gross Margin"],
+            "direction": "Review",
+            "evidence": "Product category revenue disclosure and MD&A.",
+            "confidence": "High",
+            "suggested_action": "Check whether non-iPhone categories are adding growth or only cycling around product launches.",
+            "sotp_line_affected": "Product revenue if SOTP segment exists",
+            "multiples_implication": "Broader product contribution can reduce dependence on iPhone cycles.",
+            "manual_review_needed": "Yes",
+        },
+        {
+            "driver": "Installed base and Services revenue per device",
+            "driver_category": "Installed Base",
+            "story_signal": "The installed base converts hardware ownership into recurring Services monetization.",
+            "affected_assumptions": ["Revenue Growth", "OCF Margin", "Terminal Multiple"],
+            "direction": "Review",
+            "evidence": "Installed-base disclosure, Services commentary, external estimates if allowed.",
+            "confidence": "Medium",
+            "suggested_action": "Check active devices, Services ARPU, retention, and attach-rate assumptions.",
+            "sotp_line_affected": "Services value and terminal multiple",
+            "multiples_implication": "Higher monetization per device supports a stronger terminal multiple.",
+            "manual_review_needed": "Yes",
+        },
+        {
+            "driver": "Products vs Services gross margin mix",
+            "driver_category": "Margin Mix",
+            "story_signal": "Services mix can lift consolidated gross margin even when hardware growth is mature.",
+            "affected_assumptions": ["Gross Margin", "NOPAT Margin", "OCF Margin"],
+            "direction": "Review",
+            "evidence": "Products and Services gross margin disclosure.",
+            "confidence": "High",
+            "suggested_action": "Review product margin, Services margin, FX, component costs, and mix.",
+            "sotp_line_affected": "Gross profit and Services value",
+            "multiples_implication": "Higher margin durability can support premium valuation.",
+            "manual_review_needed": "Yes",
+        },
+        {
+            "driver": "Buybacks / diluted share count",
+            "driver_category": "Capital Allocation",
+            "story_signal": "Aggressive buybacks can compound per-share value even if enterprise value growth is modest.",
+            "affected_assumptions": ["Diluted Shares", "Fair Value Per Share", "Net Debt"],
+            "direction": "Review",
+            "evidence": "Cash-flow statement, share count, capital-return authorization.",
+            "confidence": "High",
+            "suggested_action": "Review repurchase pace, FCF coverage, net cash/debt, and diluted share trend.",
+            "sotp_line_affected": "Equity value per share",
+            "multiples_implication": "Buyback yield affects per-share compounding versus mega-cap peers.",
+            "manual_review_needed": "Yes",
+        },
+        {
+            "driver": "China / geography and supply-chain risk",
+            "driver_category": "Risk",
+            "story_signal": "China demand, regulation, component costs, and supply-chain execution can pressure revenue and margin.",
+            "affected_assumptions": ["Revenue Growth", "Gross Margin", "Terminal Multiple"],
+            "direction": "Review",
+            "evidence": "Geographic revenue, risk factors, MD&A, supplier commentary.",
+            "confidence": "Medium",
+            "suggested_action": "Review China trend, FX, supply-chain concentration, and component-cost pressure.",
+            "sotp_line_affected": "Product revenue and consolidated risk premium",
+            "multiples_implication": "Higher geographic/supply-chain risk can reduce terminal multiple support.",
+            "manual_review_needed": "Yes",
+        },
+    ]
+    return {
+        "business_model_type": "Premium Consumer Technology Ecosystem",
+        "economic_engine_summary": (
+            f"{company}'s economic engine is not simply hardware sales. It is a premium device ecosystem led by iPhone, "
+            "monetized through repeat upgrade cycles, installed-base Services attach, high-margin platform revenue, supply-chain execution, and buyback-led per-share compounding."
+        ),
+        "what_they_do": (
+            f"{company} sells premium devices and ecosystem services: iPhone, Mac, iPad, Wearables/Home/Accessories, and Services such as App Store, iCloud, AppleCare, payments, licensing, and subscriptions."
+        ),
+        "product_or_service_story": (
+            "iPhone is the anchor because it drives ecosystem entry, replacement demand, accessories, and Services attach. "
+            "Services are strategically important because they carry higher-margin, more recurring economics and may justify a higher terminal multiple than a pure hardware business."
+        ),
+        "growth_driver_story": (
+            "The key valuation debate is whether iPhone replacement demand and installed-base monetization can keep revenue growing despite hardware maturity. "
+            "If Services mix rises, gross margin and OCF quality may improve; if iPhone or China weakens, lower revenue growth, gross margin, or terminal multiple may be warranted."
+        ),
+        "core_revenue_drivers": ["iPhone revenue growth", "Services growth", "Mac/iPad/Wearables contribution", "Installed-base monetization"],
+        "core_margin_drivers": ["Products gross margin", "Services gross margin", "Product mix", "Supply-chain/component costs"],
+        "core_ocf_drivers": ["Services cash collection", "Inventory discipline", "Supplier/payment terms", "Working-capital timing"],
+        "core_capex_drivers": ["Data centers", "Tooling/silicon investment", "AI/device capability", "Maintenance CAPEX"],
+        "core_dilution_or_balance_sheet_drivers": ["Buybacks", "Diluted shares", "Net cash/debt", "Capital-return capacity"],
+        "core_terminal_value_drivers": ["Installed-base durability", "Services mix", "iPhone cycle resilience", "Platform/regulatory risk"],
+        "sector_theme_peer_context": {
+            "sector_summary": "Technology / consumer electronics, but the right lens is device ecosystem plus services platform.",
+            "theme_summary": "Compare hardware peers on product margins, platform/services peers on Services quality, and mega-cap peers on FCF durability and buyback yield.",
+            "peer_positioning": "Peer context should test whether Apple deserves a services/platform premium or a mature hardware discount.",
+            "relative_strengths": ["Installed base", "Services margin mix", "Buyback capacity"],
+            "relative_weaknesses": ["iPhone maturity", "China/geography pressure", "App Store/regulatory risk"],
+            "assumption_implications": [
+                "Tie revenue growth to iPhone and Services rather than one generic CAGR.",
+                "Tie terminal multiple to Services mix, installed-base durability, and regulatory/geography risk.",
+            ],
+        },
+        "driver_to_assumption_map": driver_map,
+        "story_to_driver_mapping": _driver_reflection(driver_map),
+        "detailed_story_sections": story_sections,
+        "manual_review_items": [
+            "Review iPhone revenue trend, ASP/mix, upgrade cycle, launch timing, and China/geography pressure.",
+            "Review Services revenue growth, Services gross margin, App Store risk, iCloud/AppleCare/payments detail, and installed-base monetization.",
+            "Review Products vs Services gross margin mix, component cost, FX, supply-chain execution, and product launch cadence.",
+            "Review buyback pace, diluted share count, FCF coverage, net cash/debt, and capital-return authorization.",
+        ],
+    }
+
+
 def _driver_reflection(driver_rows: list[dict]) -> list[dict]:
     reflected = []
     for item in driver_rows[:18]:
@@ -442,9 +650,17 @@ def build_pa11_story(
     selected_template = driver_template or get_driver_template(profile)
     story_template = _story_template(profile)
     clause_rows = _top_clause_rows(clauses)
+    ticker_story = _ticker_specific_story(company, dataset.get("ticker"))
+    if ticker_story.get("driver_to_assumption_map"):
+        story_template = {**story_template, **{key: ticker_story[key] for key in ["core_revenue_drivers", "core_margin_drivers", "core_ocf_drivers", "core_capex_drivers", "core_dilution_or_balance_sheet_drivers", "core_terminal_value_drivers"] if key in ticker_story}}
     driver_rows = _driver_to_assumption_map(story_template, profile, clause_rows, ma_analysis, social_buzz)
+    if ticker_story.get("driver_to_assumption_map"):
+        driver_rows = ticker_story["driver_to_assumption_map"]
     assumption_rows = _assumption_map(driver_rows)
     peer_summary, sector_theme_peer_context = _peer_context(profile, peer_data, sector, industry, story_template)
+    if ticker_story.get("sector_theme_peer_context"):
+        sector_theme_peer_context = ticker_story["sector_theme_peer_context"]
+        peer_summary = sector_theme_peer_context.get("peer_positioning", peer_summary)
     moat_context = (moat_analysis or {}).get("terminal_value_implication") or (moat_analysis or {}).get("classification") or "Moat/risk context unavailable."
     ma_summary = (ma_analysis or {}).get("summary") or "No clear M&A impact found. Manual review: check business combinations note, goodwill/intangibles, 8-Ks, and MD&A."
     management_summary = (management_analysis or {}).get("summary") or "Management story unavailable. Load SEC evidence for deeper founder, board, and governance context."
@@ -458,15 +674,18 @@ def build_pa11_story(
     ]
     if selected_template.get("manual_review_questions"):
         manual_review.extend(selected_template.get("manual_review_questions", [])[:4])
+    if ticker_story.get("manual_review_items"):
+        manual_review = ticker_story["manual_review_items"] + [item for item in manual_review if item not in ticker_story["manual_review_items"]]
 
     economic_engine = story_template.get("economic_engine", PROFILE_STORIES["General"]["economic_engine"])
-    what_they_do = _sentences(description or f"{company} operates in {sector} / {industry}.", 2, 420)
-    product_story = _sentences(description or story_template.get("product_story"), 3, 520)
+    what_they_do = ticker_story.get("what_they_do") or _sentences(description or f"{company} operates in {sector} / {industry}.", 2, 420)
+    product_story = ticker_story.get("product_or_service_story") or _sentences(description or story_template.get("product_story"), 3, 520)
     economic_summary = (
         f"{company} should be analyzed as a {story_template.get('business_model_type', profile)} business. "
         f"Economic engine: {economic_engine}"
     )
-    growth_story = (
+    economic_summary = ticker_story.get("economic_engine_summary") or economic_summary
+    growth_story = ticker_story.get("growth_driver_story") or (
         "Growth is not one generic CAGR input. It should be tied to "
         + ", ".join(story_template.get("revenue", [])[:4])
         + ", then checked against margin, cash conversion, reinvestment, and dilution drivers."
@@ -474,7 +693,7 @@ def build_pa11_story(
 
     return {
         "company_one_liner": f"{company} operates in {sector} / {industry}.",
-        "business_model_type": story_template.get("business_model_type", profile),
+        "business_model_type": ticker_story.get("business_model_type") or story_template.get("business_model_type", profile),
         "business_model_confidence": profile_confidence,
         "business_model_reason": profile_reason,
         "economic_engine_summary": _clip(economic_summary, 520),
@@ -482,13 +701,13 @@ def build_pa11_story(
         "how_they_make_money": _clip(story_template.get("make_money"), 520),
         "product_or_service_story": product_story,
         "product_story": product_story,
-        "core_revenue_drivers": story_template.get("revenue", []),
-        "core_margin_drivers": story_template.get("margin", []),
+        "core_revenue_drivers": ticker_story.get("core_revenue_drivers") or story_template.get("revenue", []),
+        "core_margin_drivers": ticker_story.get("core_margin_drivers") or story_template.get("margin", []),
         "core_opex_drivers": story_template.get("opex", []),
-        "core_ocf_drivers": story_template.get("ocf", []),
-        "core_capex_drivers": story_template.get("capex", []),
-        "core_dilution_or_balance_sheet_drivers": story_template.get("balance", []),
-        "core_terminal_value_drivers": story_template.get("terminal", []),
+        "core_ocf_drivers": ticker_story.get("core_ocf_drivers") or story_template.get("ocf", []),
+        "core_capex_drivers": ticker_story.get("core_capex_drivers") or story_template.get("capex", []),
+        "core_dilution_or_balance_sheet_drivers": ticker_story.get("core_dilution_or_balance_sheet_drivers") or story_template.get("balance", []),
+        "core_terminal_value_drivers": ticker_story.get("core_terminal_value_drivers") or story_template.get("terminal", []),
         "industry_theme_context": sector_theme_peer_context.get("theme_summary"),
         "peer_positioning_context": peer_summary,
         "competitive_dynamics": story_template.get("competitive"),
@@ -514,7 +733,9 @@ def build_pa11_story(
         "moat_and_risk_context": _clip(moat_context, 420),
         "management_context": _clip(management_summary, 420),
         "driver_to_assumption_map": driver_rows,
-        "driver_reflection_map": _driver_reflection(driver_rows),
+        "driver_reflection_map": ticker_story.get("story_to_driver_mapping") or _driver_reflection(driver_rows),
+        "story_to_driver_mapping": ticker_story.get("story_to_driver_mapping") or _driver_reflection(driver_rows),
+        "detailed_story_sections": ticker_story.get("detailed_story_sections") or [],
         "assumption_map": assumption_rows,
         "relevant_clauses": clause_rows,
         "key_questions_for_user": [

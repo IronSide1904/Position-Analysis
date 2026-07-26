@@ -124,3 +124,93 @@ def test_key_driver_discovery_uses_profile_product_lines_for_unknown_software():
     assert "retention" in text
     assert "sbc" in text or "buybacks" in text
     assert "revenue growth %" not in text
+
+
+def test_aapl_key_driver_default_rows_are_product_service_focused():
+    from ui.dashboard_v2 import _build_profile_key_driver_table
+
+    assumptions = {"revenue_cagr": 0.08, "gross_margin": 0.46, "diluted_share_growth": -0.02, "forecast_years": 5}
+    specs = [(1, "FY2026E"), (2, "FY2027F"), (3, "FY2028F"), (4, "FY2029F"), (5, "FY2030F")]
+    original_matrix = pd.DataFrame(
+        [
+            {"Row Key": "revenue_cagr", "Assumption": "Revenue Growth %", "Row Type": "Input", "Evidence": "Scenario-based", "Confidence": "Medium"},
+            {"Row Key": "revenue_amount", "Assumption": "Revenue ($)", "Row Type": "Calculated", "Evidence": "Calculated", "Confidence": "High"},
+        ]
+    )
+    ctx = {
+        "dataset": {
+            "ticker": "AAPL",
+            "company": "Apple Inc.",
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+            "company_description": "Apple sells iPhone, Mac, iPad, Wearables and Services.",
+            "market_data": {},
+        },
+        "historicals": pd.DataFrame([{"Period": "FY2025A", "Revenue": 416_000_000_000}]),
+        "pa11_story": {},
+    }
+
+    table = _build_profile_key_driver_table(ctx, assumptions, pd.DataFrame(), {}, original_matrix, specs, ["FY2025A"], "Consumer Brand / Retail", False)
+    text = " ".join(table["Product / Service Line"].astype(str).tolist() + table["Specific Driver"].astype(str).tolist()).lower()
+
+    assert "iphone" in text
+    assert "mac" in text
+    assert "ipad" in text
+    assert "wearables" in text
+    assert "services" in text
+    assert "buybacks" in text or "diluted shares" in text
+    assert "store growth" not in text
+    assert "same-store" not in text
+    assert "backlog" not in text
+    assert len(table) <= 12
+
+
+def test_product_driver_rollup_sets_consolidated_revenue_growth():
+    from ui.dashboard_v2 import _apply_product_driver_rollup
+
+    specs = [(1, "FY2026E")]
+    assumptions = {"revenue_cagr": 0.08, "gross_margin": 0.45, "forecast_years": 1}
+    ctx = {
+        "dataset": {"ticker": "AAPL", "market_data": {}},
+        "historicals": pd.DataFrame([{"Period": "FY2025A", "Revenue": 100.0}]),
+    }
+    table = pd.DataFrame(
+        [
+            {"Row Key": "pline:iphone:revenue_growth", "Product / Service Line": "iPhone", "Specific Driver": "Revenue Growth %", "Row Type": "Input", "FY2026E": "20.0%"},
+            {"Row Key": "pline:mac:revenue_growth", "Product / Service Line": "Mac", "Specific Driver": "Revenue Growth %", "Row Type": "Input", "FY2026E": "0.0%"},
+            {"Row Key": "pline:ipad:revenue_growth", "Product / Service Line": "iPad", "Specific Driver": "Revenue Growth %", "Row Type": "Input", "FY2026E": "0.0%"},
+            {"Row Key": "pline:wearables:revenue_growth", "Product / Service Line": "Wearables", "Specific Driver": "Revenue Growth %", "Row Type": "Input", "FY2026E": "0.0%"},
+            {"Row Key": "pline:services:revenue_growth", "Product / Service Line": "Services", "Specific Driver": "Revenue Growth %", "Row Type": "Input", "FY2026E": "0.0%"},
+        ]
+    )
+
+    updated = _apply_product_driver_rollup(ctx, "Consumer Brand / Retail", table, assumptions, specs)
+
+    assert round(updated["forecast_assumptions_by_year"]["1"]["revenue_cagr"], 4) == 0.10
+
+
+def test_aapl_pa11_story_is_product_specific_and_analytical():
+    dataset = {
+        "ticker": "AAPL",
+        "company": "Apple Inc.",
+        "sector": "Technology",
+        "industry": "Consumer Electronics",
+        "company_description": "Apple sells smartphones, personal computers, tablets, wearables, accessories, and services.",
+    }
+    story = build_pa11_story(dataset)
+    combined = " ".join(
+        [
+            story["economic_engine_summary"],
+            story["growth_driver_story"],
+            " ".join(row["driver"] for row in story["driver_to_assumption_map"]),
+            " ".join(section["Read"] for section in story["detailed_story_sections"]),
+        ]
+    ).lower()
+
+    assert story["business_model_type"] == "Premium Consumer Technology Ecosystem"
+    assert "iphone" in combined
+    assert "services" in combined
+    assert "installed base" in combined
+    assert "buybacks" in combined
+    assert "terminal multiple" in combined
+    assert story["story_to_driver_mapping"]
