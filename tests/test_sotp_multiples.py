@@ -2,7 +2,7 @@ import pandas as pd
 
 from models.dcf_model import default_assumptions_from_historicals, run_dcf
 from models.multiples_model import build_multiples_table, calculate_current_multiples, calculate_scenario_implied_multiples, peer_median_multiples
-from models.sotp_model import build_default_segment_data, run_reverse_sotp, run_sotp, run_sotp_scenarios
+from models.sotp_model import VALUATION_METHODS, build_default_segment_data, run_reverse_sotp, run_sotp, run_sotp_scenarios
 
 
 def sample_historicals():
@@ -41,6 +41,31 @@ def test_sotp_scenarios_and_reverse_sotp_do_not_blank_without_segment_filings():
     assert set(scenarios) == {"Bear Case", "Base Case", "Bull Case", "User Case", "Market-Implied Case"}
     assert not reverse["segments"].empty
     assert "Market-Implied EV/Revenue" in reverse["segments"].columns
+
+
+def test_sotp_defaults_use_aapl_product_service_segments():
+    historicals = sample_historicals()
+    assumptions = default_assumptions_from_historicals(historicals, {"shares_outstanding": 100.0})
+    segments = build_default_segment_data(
+        historicals,
+        {
+            "ticker": "AAPL",
+            "sector": "Technology",
+            "company_description": "Apple reports iPhone, Mac, iPad, Wearables and Services revenue.",
+        },
+        assumptions,
+    )
+    names = set(segments["Segment"].astype(str))
+
+    assert {"iPhone", "Mac", "iPad", "Wearables, Home and Accessories", "Services"}.issubset(names)
+    assert "Core business" not in names
+    assert "Manual Segment Value" in segments.columns
+
+
+def test_sotp_supports_required_valuation_methods():
+    required = {"EV/Revenue", "EV/EBITDA", "EV/EBIT", "EV/NOPAT", "EV/OCF", "EV/FCF", "P/E", "Manual Value"}
+
+    assert required.issubset(set(VALUATION_METHODS))
 
 
 def test_multiples_table_uses_unavailable_safe_values_and_peer_fallbacks():

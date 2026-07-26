@@ -116,7 +116,7 @@ from ui.formatting import (
     fmt_volume,
 )
 from ui.multiples import render_multiples_tab
-from ui.sotp import get_active_sotp, render_sotp_tab
+from ui.sotp import get_active_sotp, render_sotp_lens, render_sotp_tab, sotp_data_status
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -714,6 +714,8 @@ def _snapshot_valuation_cards(ctx: dict, scenario_state: ScenarioModelState | No
             peer_multiples=ctx.get("peer_df"),
             sector=ctx.get("dataset", {}).get("sector"),
         )
+    sotp_segments = st.session_state.get(f"sotp_{ctx.get('dataset', {}).get('ticker', 'default')}_segments", build_default_segment_data(ctx.get("historicals"), ctx.get("dataset", {}), ctx.get("base_assumptions", {})))
+    sotp_status, sotp_status_subtitle, sotp_card_status = sotp_data_status(sotp_segments)
     current_multiples = calculate_current_multiples(ctx.get("historicals"), market)
     peer_medians, _warnings = peer_median_multiples(ctx.get("peer_df"), ctx.get("dataset", {}).get("sector"), ctx.get("dataset", {}).get("industry"))
     current_ev_ocf = current_multiples.get("EV/OCF")
@@ -722,13 +724,20 @@ def _snapshot_valuation_cards(ctx: dict, scenario_state: ScenarioModelState | No
     multiple_risk = "High" if premium is not None and premium > 0.35 else "Medium" if premium is not None and premium > 0.15 else "Normal"
     premium_text = fmt_percent(premium) if premium is not None else UNAVAILABLE
     whole_status = "supportive" if ">" in str(sotp.get("whole_vs_sum")) else "warning" if "Overvalued" in str(sotp.get("whole_vs_sum")) else "neutral"
+    sotp_gap = sotp.get("sotp_vs_dcf_gap_pct")
+    sotp_view_subtitle = (
+        f"SOTP {fmt_per_share(sotp.get('fair_value_per_share'))} vs DCF {fmt_per_share(dcf.get('fair_value_per_share'))}; "
+        f"price {fmt_per_share(market.get('price'))}; gap {fmt_percent(sotp_gap)}. "
+        f"{sotp.get('whole_vs_sum') or 'Whole-vs-parts unavailable'}. Data: {sotp_status}."
+    )
     return [
         {"title": "Selected Scenario", "value": selected_case, "subtitle": "Snapshot uses this active valuation scenario.", "status": "info"},
         {"title": "DCF Fair Value", "value": fmt_per_share(dcf.get("fair_value_per_share")), "subtitle": f"{selected_case} intrinsic value anchor.", "status": "info"},
-        {"title": "SOTP Fair Value", "value": fmt_per_share(sotp.get("fair_value_per_share")), "subtitle": f"{selected_case} sum-of-the-parts read.", "status": "info"},
+        {"title": "SOTP View", "value": fmt_per_share(sotp.get("fair_value_per_share")) if sotp.get("fair_value_per_share") is not None else "Unavailable", "subtitle": sotp_view_subtitle, "status": sotp_card_status},
         {"title": "Current Price", "value": fmt_per_share(market.get("price")), "subtitle": "Provider market price.", "status": "neutral"},
         {"title": "Market-Implied Gap", "value": (scenario_state.reverse_dcf_outputs or {}).get("market_case") if scenario_state else ctx.get("reverse", {}).get("market_case"), "subtitle": (scenario_state.reverse_dcf_outputs or {}).get("interpretation") if scenario_state else ctx.get("reverse", {}).get("interpretation"), "status": "info"},
         {"title": "Whole vs Parts", "value": sotp.get("whole_vs_sum") or "Unavailable", "subtitle": sotp.get("whole_vs_sum_interpretation"), "status": whole_status},
+        {"title": "SOTP Data Status", "value": sotp_status, "subtitle": sotp_status_subtitle, "status": sotp_card_status},
         {"title": "Scenario Multiple Risk", "value": multiple_risk, "subtitle": f"Current EV/OCF premium vs peer: {premium_text}.", "status": "warning" if multiple_risk == "High" else "caution" if multiple_risk == "Medium" else "supportive"},
         {"title": "Peer Premium / Discount", "value": premium_text, "subtitle": "Current EV/OCF versus peer/sector reference.", "status": "warning" if premium is not None and premium > 0.25 else "supportive" if premium is not None and premium < -0.15 else "neutral"},
     ]
@@ -8028,7 +8037,7 @@ def _pa11r_valuation_tab(ctx: dict, analyst_details: bool) -> None:
             "Scenario comparison unavailable.",
         )
     with st.expander("SOTP Lens", expanded=False):
-        render_sotp_tab(ctx, analyst_details, key_prefix="pa11r_valuation_sotp")
+        render_sotp_lens(ctx, key_prefix="pa11r_valuation_sotp_lens")
     with st.expander("Multiples / Peer Lens", expanded=False):
         render_multiples_tab(ctx, key_prefix="pa11r_valuation_multiples")
     if analyst_details:
@@ -8214,6 +8223,7 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
         [
             "DCF Model",
             "Snapshot",
+            "SOTP",
             "Financials & Reinvestment",
             "Evidence & Assumptions",
             "Business Quality & Risks",
@@ -8225,12 +8235,16 @@ def _render_pa11r_hybrid(ctx: dict, analyst_details: bool) -> None:
     with tabs[1]:
         _pa11r_snapshot(ctx)
     with tabs[2]:
-        _pa11r_financials_reinvestment_tab(ctx, analyst_details)
+        if st.session_state.pop("open_sotp_workbench_hint", False):
+            st.info("Full SOTP Workbench opened from the DCF tab lens.")
+        render_sotp_tab(ctx, analyst_details, key_prefix="pa11r_main_sotp")
     with tabs[3]:
-        _pa11r_evidence_assumptions_tab(ctx, analyst_details)
+        _pa11r_financials_reinvestment_tab(ctx, analyst_details)
     with tabs[4]:
-        _pa11r_business_quality_tab(ctx, analyst_details)
+        _pa11r_evidence_assumptions_tab(ctx, analyst_details)
     with tabs[5]:
+        _pa11r_business_quality_tab(ctx, analyst_details)
+    with tabs[6]:
         _sources_data_quality_tab(ctx, analyst_details)
 
 

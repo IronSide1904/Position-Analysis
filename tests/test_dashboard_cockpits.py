@@ -9,6 +9,7 @@ def test_pa11r_cockpit_tabs_render():
     expected = [
         "DCF Model",
         "Snapshot",
+        "SOTP",
         "Financials & Reinvestment",
         "Evidence & Assumptions",
         "Business Quality & Risks",

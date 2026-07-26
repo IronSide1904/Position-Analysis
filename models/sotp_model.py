@@ -7,7 +7,7 @@ import pandas as pd
 
 
 SOTP_SCENARIOS = ["Bear Case", "Base Case", "Bull Case", "User Case", "Market-Implied Case"]
-VALUATION_METHODS = ["EV/Revenue", "EV/EBITDA", "EV/NOPAT", "EV/OCF", "EV/FCF"]
+VALUATION_METHODS = ["EV/Revenue", "EV/EBITDA", "EV/EBIT", "EV/NOPAT", "EV/OCF", "EV/FCF", "P/E", "Manual Value"]
 
 
 SECTOR_MULTIPLE_FALLBACKS = {
@@ -16,6 +16,38 @@ SECTOR_MULTIPLE_FALLBACKS = {
     "industrials": {"EV/Revenue": 2.0, "EV/EBITDA": 11.0, "EV/NOPAT": 16.0, "EV/OCF": 14.0, "EV/FCF": 16.0},
     "consumer cyclical": {"EV/Revenue": 1.6, "EV/EBITDA": 10.0, "EV/NOPAT": 15.0, "EV/OCF": 13.0, "EV/FCF": 15.0},
     "default": {"EV/Revenue": 2.5, "EV/EBITDA": 12.0, "EV/NOPAT": 18.0, "EV/OCF": 16.0, "EV/FCF": 18.0},
+}
+
+
+PRODUCT_SEGMENT_FALLBACKS = {
+    "AAPL": [
+        ("iPhone", 0.50, "EV/Revenue", 4.5, "Reported product revenue category / manual allocation"),
+        ("Mac", 0.08, "EV/Revenue", 3.0, "Reported product revenue category / manual allocation"),
+        ("iPad", 0.07, "EV/Revenue", 2.5, "Reported product revenue category / manual allocation"),
+        ("Wearables, Home and Accessories", 0.10, "EV/Revenue", 3.5, "Reported product revenue category / manual allocation"),
+        ("Services", 0.25, "EV/OCF", 22.0, "Reported services category / manual allocation"),
+    ],
+    "AMZN": [
+        ("AWS", 0.18, "EV/OCF", 20.0, "Segment/product-service fallback"),
+        ("Online Stores", 0.38, "EV/Revenue", 1.2, "Revenue disaggregation fallback"),
+        ("Third-Party Seller Services", 0.20, "EV/Revenue", 3.5, "Revenue disaggregation fallback"),
+        ("Advertising", 0.12, "EV/Revenue", 6.0, "Revenue disaggregation fallback"),
+        ("Subscriptions", 0.08, "EV/Revenue", 4.0, "Revenue disaggregation fallback"),
+        ("Physical Stores / Other", 0.04, "EV/Revenue", 0.8, "Manual allocation fallback"),
+    ],
+    "MSFT": [
+        ("Intelligent Cloud / Azure", 0.34, "EV/OCF", 22.0, "Segment/product-service fallback"),
+        ("Productivity & Business Processes", 0.36, "EV/OCF", 24.0, "Segment fallback"),
+        ("More Personal Computing", 0.18, "EV/NOPAT", 18.0, "Segment fallback"),
+        ("LinkedIn", 0.06, "EV/Revenue", 7.0, "Product-service fallback"),
+        ("Gaming", 0.06, "EV/Revenue", 4.0, "Product-service fallback"),
+    ],
+    "NBIS": [
+        ("Blackwell capacity economics", 0.45, "EV/Revenue", 6.0, "Manual capacity economics fallback"),
+        ("Rubin capacity economics", 0.20, "EV/Revenue", 5.5, "Manual capacity economics fallback"),
+        ("Other compute / cloud services", 0.25, "EV/Revenue", 4.0, "Manual capacity economics fallback"),
+        ("Customer prepayments / services", 0.10, "EV/OCF", 12.0, "Manual funding/service fallback"),
+    ],
 }
 
 
@@ -86,6 +118,44 @@ def build_default_segment_data(
     terminal_multiple = assumptions.get("terminal_multiple", 15.0)
     method = "EV/FCF" if ocf_margin and capex_intensity and ocf_margin > capex_intensity else "EV/NOPAT"
     description = str(dataset.get("company_description") or "").lower()
+    ticker = str(dataset.get("ticker") or "").upper()
+    product_fallbacks = PRODUCT_SEGMENT_FALLBACKS.get(ticker)
+    if product_fallbacks and revenue > 0:
+        rows = []
+        for segment, weight, segment_method, multiple, source in product_fallbacks:
+            segment_revenue = revenue * weight
+            segment_gross_margin = gross_margin
+            segment_ocf_margin = ocf_margin
+            segment_nopat_margin = nopat_margin
+            if ticker == "AAPL" and "Services" in segment:
+                segment_gross_margin = min(max(float(gross_margin or 0.45) + 0.18, 0.55), 0.85)
+                segment_ocf_margin = min(max(float(ocf_margin or 0.16) + 0.08, 0.20), 0.60)
+                segment_nopat_margin = min(max(float(nopat_margin or 0.12) + 0.08, 0.18), 0.55)
+            elif ticker == "AAPL":
+                segment_gross_margin = max(float(gross_margin or 0.45) - 0.04, 0.20)
+                segment_ocf_margin = max(float(ocf_margin or 0.16) - 0.02, 0.03)
+            rows.append(
+                {
+                    "Segment": segment,
+                    "Revenue": segment_revenue,
+                    "Revenue Growth": assumptions.get("revenue_cagr", 0.08),
+                    "Gross Margin": segment_gross_margin,
+                    "OPEX % Revenue": max(float(segment_gross_margin or 0.45) - float(assumptions.get("operating_margin", 0.15) or 0.15), 0.0),
+                    "OCF Margin": segment_ocf_margin,
+                    "NOPAT Margin": segment_nopat_margin,
+                    "CAPEX % Revenue": capex_intensity,
+                    "Reinvestment Need": assumptions.get("growth_capex_pct_revenue", 0.02),
+                    "Valuation Method": segment_method,
+                    "Selected Multiple": multiple,
+                    "Peer Multiple": peer_multiple_for_method(None, segment_method, dataset.get("sector")),
+                    "Market-Implied Multiple": None,
+                    "Manual Segment Value": None,
+                    "Discount / Premium": 0.0,
+                    "Confidence": "Medium",
+                    "Source": source,
+                }
+            )
+        return pd.DataFrame(rows)
     rows = [
         {
             "Segment": "Core business",
@@ -99,6 +169,7 @@ def build_default_segment_data(
             "Reinvestment Need": assumptions.get("growth_capex_pct_revenue", 0.02),
             "Valuation Method": method,
             "Selected Multiple": terminal_multiple,
+            "Manual Segment Value": None,
             "Discount / Premium": 0.0,
             "Confidence": "Low" if revenue <= 0 else "Medium",
             "Source": "Manual builder fallback",
@@ -122,6 +193,7 @@ def build_default_segment_data(
                 "Reinvestment Need": assumptions.get("growth_capex_pct_revenue", 0.02),
                 "Valuation Method": "EV/EBITDA",
                 "Selected Multiple": peer_multiple_for_method(None, "EV/EBITDA", dataset.get("sector")),
+                "Manual Segment Value": None,
                 "Discount / Premium": -0.1,
                 "Confidence": "Low",
                 "Source": "Manual split from business description",
@@ -159,9 +231,11 @@ def normalize_segment_table(segment_data: pd.DataFrame | None, assumptions: dict
         "Selected Multiple": assumptions.get("terminal_multiple", 15.0),
         "Peer Multiple": None,
         "Market-Implied Multiple": None,
+        "Manual Segment Value": None,
         "Discount / Premium": 0.0,
         "Confidence": "Manual Review",
         "Source": "Manual",
+        "User Note": "",
     }
     for column, default in defaults.items():
         if column not in frame:
@@ -178,16 +252,23 @@ def _segment_basis(row: pd.Series, method: str) -> float:
     ocf_margin = _safe_float(row.get("OCF Margin"), 0.16) or 0.16
     nopat_margin = _safe_float(row.get("NOPAT Margin"), 0.12) or 0.12
     capex_ratio = abs(_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03)
+    ebit = revenue * max(gross_margin - opex_ratio, 0.0)
     if method == "EV/Revenue":
         return revenue
     if method == "EV/EBITDA":
         return revenue * max(gross_margin - opex_ratio + capex_ratio, 0.0)
+    if method == "EV/EBIT":
+        return ebit
     if method == "EV/NOPAT":
         return revenue * max(nopat_margin, 0.0)
     if method == "EV/OCF":
         return revenue * max(ocf_margin, 0.0)
     if method == "EV/FCF":
         return revenue * max(ocf_margin - capex_ratio, 0.0)
+    if method == "P/E":
+        return revenue * max(nopat_margin, 0.0)
+    if method == "Manual Value":
+        return 1.0
     return revenue * max(nopat_margin, 0.0)
 
 
@@ -299,7 +380,10 @@ def run_sotp(
                     selected_multiple = market_implied_multiple
         discount = (_safe_float(row.get("Discount / Premium"), 0.0) or 0.0) + adjustments.get("discount", 0.0)
         basis = _segment_basis(row, method)
-        segment_ev = basis * selected_multiple * (1 + discount)
+        if method == "Manual Value":
+            segment_ev = _safe_float(row.get("Manual Segment Value"), 0.0) or 0.0
+        else:
+            segment_ev = basis * selected_multiple * (1 + discount)
         if method == "EV/Revenue" and (row.get("NOPAT Margin") is None or float(row.get("NOPAT Margin") or 0) <= 0):
             warnings.append(f"{row.get('Segment')}: EV/Revenue used because profit basis is unavailable or negative; review margin normalization.")
         total_ev += segment_ev
@@ -317,6 +401,11 @@ def run_sotp(
                 "Selected Multiple": selected_multiple,
                 "Peer Multiple": peer_multiple,
                 "Market-Implied Multiple": market_implied_multiple,
+                "Manual Segment Value": row.get("Manual Segment Value"),
+                "EBIT": row.get("Revenue") * max((_safe_float(row.get("Gross Margin"), 0.45) or 0.45) - (_safe_float(row.get("OPEX % Revenue"), 0.30) or 0.30), 0.0),
+                "NOPAT": row.get("Revenue") * max((_safe_float(row.get("NOPAT Margin"), 0.12) or 0.12), 0.0),
+                "OCF": row.get("Revenue") * max((_safe_float(row.get("OCF Margin"), 0.16) or 0.16), 0.0),
+                "FCF": row.get("Revenue") * max((_safe_float(row.get("OCF Margin"), 0.16) or 0.16) - abs(_safe_float(row.get("CAPEX % Revenue"), 0.03) or 0.03), 0.0),
                 "Segment EV": segment_ev,
                 "% of Total EV": None,
                 "Confidence": row.get("Confidence"),
